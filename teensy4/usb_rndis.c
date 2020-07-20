@@ -29,7 +29,7 @@
  */
 
 #include "usb_dev.h"
-#include "usb_serial.h"
+#include "usb_rndis_internal.h"
 #include "core_pins.h"// for delay()
 #include <string.h> // for memcpy()
 #include "avr/pgmspace.h" // for PROGMEM, DMAMEM, FASTRUN
@@ -41,63 +41,55 @@
 // defined by usb_dev.h -> usb_desc.h
 #if defined(USB_RNDIS)
 
-// RNDIS spec: https://docs.microsoft.com/en-us/previous-versions/ff570635(v=vs.85)
+static const uint32_t OIDSupportedList[] = {
+/* Required General */
+OID_GEN_SUPPORTED_LIST,
+OID_GEN_HARDWARE_STATUS,
+OID_GEN_MEDIA_SUPPORTED,
+OID_GEN_MEDIA_IN_USE,
+OID_GEN_MAXIMUM_FRAME_SIZE,
+OID_GEN_LINK_SPEED,
+OID_GEN_TRANSMIT_BLOCK_SIZE,
+OID_GEN_RECEIVE_BLOCK_SIZE,
+OID_GEN_VENDOR_ID,
+OID_GEN_VENDOR_DESCRIPTION,
+OID_GEN_CURRENT_PACKET_FILTER,
+OID_GEN_MAXIMUM_TOTAL_SIZE,
+OID_GEN_MEDIA_CONNECT_STATUS,
+OID_GEN_VENDOR_DRIVER_VERSION,
+OID_GEN_PHYSICAL_MEDIUM,
 
-enum {
-	RNDIS_MESSAGE_TYPE_PACKET_DATA = 0x01,
-	RNDIS_MESSAGE_TYPE_INITIALIZE = 0x02,
-	RNDIS_MESSAGE_TYPE_HALT = 0x03,
-	RNDIS_MESSAGE_TYPE_QUERY = 0x04,
-	RNDIS_MESSAGE_TYPE_SET = 0x05,
-	RNDIS_MESSAGE_TYPE_RESET = 0x06,
-	RNDIS_MESSAGE_TYPE_INDICATE = 0x07,
-	RNDIS_MESSAGE_TYPE_KEEPALIVE = 0x08,
+/* Required Statistical */
+OID_GEN_XMIT_OK,
+OID_GEN_RCV_OK,
+OID_GEN_XMIT_ERROR,
+OID_GEN_RCV_ERROR,
+OID_GEN_RCV_NO_BUFFER,
 
-	RNDIS_MESSAGE_TYPE_INITIALIZE_COMPLETE = 0x80000002,
-	RNDIS_MESSAGE_TYPE_QUERY_COMPLETE = 0x80000004,
-	RNDIS_MESSAGE_TYPE_SET_COMPLETE = 0x80000005,
-	RNDIS_MESSAGE_TYPE_RESET_COMPLETE = 0x80000006,
-	RNDIS_MESSAGE_TYPE_KEEPALIVE_COMPLETE = 0x80000008,
-};
+/* Please configure us        */
+OID_GEN_RNDIS_CONFIG_PARAMETER,
 
-struct rndis_message_header {
-	uint32_t message_type;
-	uint32_t message_length;
-};
+/* IEEE 802.3 (Ethernet) OIDs */
+OID_802_3_PERMANENT_ADDRESS,
+OID_802_3_CURRENT_ADDRESS,
+OID_802_3_MULTICAST_LIST,
+OID_802_3_MAXIMUM_LIST_SIZE,
+OID_802_3_MAC_OPTIONS,
+OID_802_3_RCV_ERROR_ALIGNMENT,
+OID_802_3_XMIT_ONE_COLLISION,
+OID_802_3_XMIT_MORE_COLLISIONS,
 
-struct rndis_initalize_message {
-	uint32_t req_id;
-	uint32_t major_version;
-	uint32_t minor_version;
-	uint32_t max_transfer_size;
-};
+/* Minimum power managment needed for USB */
 
-struct rndis_initalize_complete_message {
-	uint32_t req_id;
-	uint32_t status;
-	uint32_t major_version;
-	uint32_t minor_version;
-	uint32_t device_flags;
-	uint32_t medium;
-	uint32_t max_packets_per_message;
-	uint32_t max_transfer_size;
-	uint32_t packet_alignment_factor;
-	uint32_t reserved_AFListOffset;
-	uint32_t reserved_AFListSize;
-};
+OID_PNP_CAPABILITIES,
+OID_PNP_QUERY_POWER,
+OID_PNP_SET_POWER,
 
-struct rndis_packet_message {
-	struct rndis_message_header h;
-	uint32_t data_offset; // relative to the start of this field member
-	uint32_t data_len;
-	uint32_t oobdata_offset;
-	uint32_t oobdata_len;
-	uint32_t num_oobdata_elements;
-	uint32_t per_packet_info_offset;
-	uint32_t per_packet_info_len;
-	uint32_t vc_handle;
-	uint32_t reserved;
-};
+OID_PNP_ENABLE_WAKE_UP,
+OID_PNP_ADD_WAKE_UP_PATTERN,
+OID_PNP_REMOVE_WAKE_UP_PATTERN, };
+
+#define OID_LIST_LENGTH sizeof(OIDSupportedList)/sizeof(*OIDSupportedList)
 
 //#if F_CPU >= 20000000
 
@@ -112,8 +104,6 @@ struct rndis_packet_message {
 
 extern volatile uint8_t usb_high_speed;
 
-
-
 #define MAX_RNDIS_DATA_BYTES (3 * 512)
 #define MAX_USB_PACKETS_PER_RNDIS_DATA ((3 * 512) / CDC_TX_SIZE_12)
 #define RX_NUM_RNDIS_PACKETS  8
@@ -126,13 +116,23 @@ struct rndis_data {
 };
 
 static struct rndis_data rndis_data_rx_pool[RX_NUM_RNDIS_PACKETS];
-static struct fifo_cnt rndis_data_rx_fifo = { .capacity = RX_NUM_RNDIS_PACKETS, };
+static struct fifo_cnt rndis_data_rx_fifo =
+		{ .capacity = RX_NUM_RNDIS_PACKETS, };
 
-static transfer_t rx_transfer[RX_NUM_RNDIS_PACKETS * MAX_USB_PACKETS_PER_RNDIS_DATA] __attribute__ ((used, aligned(32)));
+static transfer_t rx_transfer[RX_NUM_RNDIS_PACKETS
+		* MAX_USB_PACKETS_PER_RNDIS_DATA] __attribute__ ((used, aligned(32)));
 DMAMEM static uint8_t rx_buffer[RX_NUM_RNDIS_PACKETS * MAX_RNDIS_DATA_BYTES] __attribute__ ((aligned(32)));
 static uint16_t rx_packet_size = 0;
 static size_t num_rx_transfers;
 
+#define TX_NUM_RNDIS_PACKETS   4
+static transfer_t tx_transfer[TX_NUM_RNDIS_PACKETS
+		* MAX_USB_PACKETS_PER_RNDIS_DATA] __attribute__ ((used, aligned(32)));
+DMAMEM static uint8_t txbuffer[TX_NUM_RNDIS_PACKETS * MAX_RNDIS_DATA_BYTES] __attribute__ ((aligned(32)));
+static size_t num_tx_transfers;
+
+static struct fifo_cnt tx_avail_fifo;
+static struct fifo_cnt tx_used_fifo;
 
 static void rx_queue_transfer(int i);
 static void rx_event(transfer_t *t);
@@ -146,26 +146,29 @@ void usb_rndis_configure(void) {
 
 	printf("usb_serial_configure\n");
 	if (usb_high_speed) {
-		tx_packet_size = CDC_TX_SIZE_480;
 		rx_packet_size = CDC_RX_SIZE_480;
 	} else {
-		tx_packet_size = CDC_TX_SIZE_12;
 		rx_packet_size = CDC_RX_SIZE_12;
 	}
 
-	num_rx_transfers = RX_NUM_RNDIS_PACKETS * (MAX_RNDIS_DATA_BYTES / rx_packet_size);
+	num_rx_transfers = RX_NUM_RNDIS_PACKETS
+			* (MAX_RNDIS_DATA_BYTES / rx_packet_size);
 	memset(rx_transfer, 0, sizeof(rx_transfer));
 	memset(&rndis_data_rx_fifo, 0, sizeof rndis_data_rx_fifo);
-	rndis_data_rx_fifo.capacity = RX_NUM_RNDIS_PACKETS;
+	rndis_data_rx_fifo = FIFO_INIT(RX_NUM_RNDIS_PACKETS);
 
-
+	num_tx_transfers = TX_NUM_RNDIS_PACKETS
+			* (MAX_RNDIS_DATA_BYTES / rx_packet_size);
 	memset(tx_transfer, 0, sizeof(tx_transfer));
-	tx_head = 0;
-	tx_available = 0;
+	tx_avail_fifo = FIFO_INIT(TX_NUM_RNDIS_PACKETS);
+	tx_used_fifo = FIFO_INIT(TX_NUM_RNDIS_PACKETS);
+
+	// all transfers are initially available
+	fifo_add(&tx_avail_fifo, num_tx_transfers);
 
 	usb_config_tx(CDC_ACM_ENDPOINT, CDC_ACM_SIZE, 0, NULL); // size same 12 & 480
 	usb_config_rx(CDC_RX_ENDPOINT, rx_packet_size, 0, rx_event);
-	usb_config_tx(CDC_TX_ENDPOINT, tx_packet_size, 1, NULL);
+	usb_config_tx(CDC_TX_ENDPOINT, rx_packet_size, 1, NULL);
 	for (i = 0; i < num_rx_transfers; i++)
 		rx_queue_transfer(i);
 
@@ -264,15 +267,17 @@ ssize_t usb_rndis_read(void *dst, size_t len) {
 		goto error;
 	}
 
-	size_t data_start = d->read_offset + h->data_offset + offsetof(h, data_offset);
+	size_t data_start = d->read_offset + h->data_offset
+			+ offsetof(h, data_offset);
 	if (data_start > d->len || data_start + h->data_len > d->len) {
 		goto error;
 	}
 
 	size_t min_len = h->data_len;
-	if (len < min_len) min_len = len;
+	if (len < min_len)
+		min_len = len;
 
-	if (rndis_data_copy(d, data_start , dst, len) != 0) { // copy payload
+	if (rndis_data_copy(d, data_start, dst, len) != 0) { // copy payload
 		goto error;
 	}
 	ret = len;
@@ -290,111 +295,35 @@ ssize_t usb_rndis_read(void *dst, size_t len) {
 	return ret;
 }
 
-
-#if 0
-//static int maxtimes=0;
-
-// read a block of bytes to a buffer
-int usb_serial_read(void *buffer, uint32_t size) {
-	uint8_t *p = (uint8_t*) buffer;
-	uint32_t count = 0;
-
-	NVIC_DISABLE_IRQ(IRQ_USB1);
-	//if (++maxtimes > 15) while (1) ;
-	uint32_t tail = rx_tail;
-	//printf("usb_serial_read, size=%d, tail=%d, head=%d\n", size, tail, rx_head);
-	while (count < size && tail != rx_head) {
-		if (++tail > RX_NUM_RNDIS_PACKETS)
-			tail = 0;
-		uint32_t i = rx_list[tail];
-		uint32_t len = size - count;
-		uint32_t avail = rx_count[i] - rx_index[i];
-		//printf("usb_serial_read, count=%d, size=%d, i=%d, index=%d, len=%d, avail=%d, c=%c\n",
-		//count, size, i, rx_index[i], len, avail, rx_buffer[i * CDC_RX_SIZE_480]);
-		if (avail > len) {
-			// partially consume this packet
-			memcpy(p, rx_buffer + i * CDC_RX_SIZE_480 + rx_index[i], len);
-			rx_available -= len;
-			rx_index[i] += len;
-			count += len;
-		} else {
-			// fully consume this packet
-			memcpy(p, rx_buffer + i * CDC_RX_SIZE_480 + rx_index[i], avail);
-			p += avail;
-			rx_available -= avail;
-			count += avail;
-			rx_tail = tail;
-			rx_queue_transfer(i);
-		}
-	}
-	NVIC_ENABLE_IRQ(IRQ_USB1);
-	return count;
-}
-#endif
-
-
 /*************************************************************************/
 /**                               Transmit                              **/
 /*************************************************************************/
 
-#define TX_NUM   4
-#define TX_SIZE  2048 /* should be a multiple of CDC_TX_SIZE */
-static transfer_t tx_transfer[TX_NUM] __attribute__ ((used, aligned(32)));
-DMAMEM static uint8_t txbuffer[TX_SIZE * TX_NUM] __attribute__ ((aligned(32)));
-static uint8_t tx_head = 0;
-static uint16_t tx_available = 0;
-static uint16_t tx_packet_size = 0;
-
-// When the PC isn't listening, how long do we wait before discarding data?  If this is
-// too short, we risk losing data during the stalls that are common with ordinary desktop
-// software.  If it's too long, we stall the user's program when no software is running.
-#define TX_TIMEOUT_MSEC 120
-
-// When we've suffered the transmit timeout, don't wait again until the computer
-// begins accepting data.  If no software is running to receive, we'll just discard
-// data as rapidly as Serial.print() can generate it, until there's something to
-// actually receive it.
-static uint8_t transmit_previous_timeout = 0;
-
-// transmit a character.  0 returned on success, -1 on error
-int usb_serial_putchar(uint8_t c) {
-	return usb_serial_write(&c, 1);
-}
-
-extern volatile uint32_t systick_millis_count;
-
-static void timer_config(void (*callback)(void), uint32_t microseconds);
-static void timer_start_oneshot();
-static void timer_stop();
-
-static void timer_config(void (*callback)(void), uint32_t microseconds) {
-	usb_timer0_callback = callback;
-	USB1_GPTIMER0CTRL = 0;
-	USB1_GPTIMER0LD = microseconds - 1;
-	USB1_USBINTR |= USB_USBINTR_TIE0;
-}
-
-static void timer_start_oneshot(void) {
-	// restarts timer if already running (retriggerable one-shot)
-	USB1_GPTIMER0CTRL = USB_GPTIMERCTRL_GPTRUN | USB_GPTIMERCTRL_GPTRST;
-}
-
-static void timer_stop(void) {
-	USB1_GPTIMER0CTRL = 0;
-}
-
-int usb_serial_write(const void *buffer, uint32_t size) {
-	uint32_t sent = 0;
-	const uint8_t *data = (const uint8_t*) buffer;
+ssize_t rndis_write(const void *data, size_t len) {
 
 	if (!usb_configuration)
 		return 0;
-	while (size > 0) {
-		transfer_t *xfer = tx_transfer + tx_head;
-		int waiting = 0;
-		uint32_t wait_begin_at = 0;
-		while (!tx_available) {
-			//digitalWriteFast(3, HIGH);
+
+	// XXX this is wrong:
+	size_t message_len = len + sizeof(struct rndis_packet_message);
+	size_t transfers_required = (message_len + rx_packet_size - 1)
+			/ rx_packet_size;
+
+	// try to release the required number of elements
+	size_t avail = fifo_level(&tx_avail_fifo);
+
+	if (avail < transfers_required) {
+		// insufficient transfer buffers.
+		size_t diff = transfers_required - avail;
+
+		for (size_t i = 0; i != diff; i++) {
+
+			if (fifo_level(&tx_used_fifo) == 0) {
+				return -1;
+			}
+
+			size_t read_index = fifo_read_index(&tx_used_fifo);
+			transfer_t *trans = &tx_transfer[read_index];
 			uint32_t status = usb_transfer_status(xfer);
 			if (!(status & 0x80)) {
 				if (status & 0x68) {
@@ -402,109 +331,571 @@ int usb_serial_write(const void *buffer, uint32_t size) {
 					printf("ERROR status = %x, i=%d, ms=%u\n",
 							status, tx_head, systick_millis_count);
 				}
-				tx_available = TX_SIZE;
-				transmit_previous_timeout = 0;
+				// move this element from used-fifo to avail-fifo
+				fifo_remove(&tx_used_fifo, 1);
+				fifo_add(&tx_avail_fifo, 1);
+			} else {
+				return -1;
+			}
+		}
+	}
+
+	// now we should have enough entries in tx_avail_fifo
+
+	bool add_header = true;
+	while (len) {
+		size_t buf_index = fifo_read_index(&tx_avail_fifo);
+		fifo_remove(&tx_avail_fifo, 1);
+		fifo_add(&tx_used_fifo, 1);
+
+		uint8_t *txbuf = txbuffer + (buf_index * rx_packet_size);
+		transfer_t *trans = &tx_transfer[buf_index];
+
+		void *p = txbuf;
+		size_t p_cap = rx_packet_size;
+
+		if (add_header) {
+			struct rndis_packet_message *h = p;
+			h->h.message_type = RNDIS_MESSAGE_TYPE_PACKET_DATA;
+			h->h.message_length = sizeof(struct rndis_packet_message) + len;
+			h->data_offset = sizeof(struct rndis_packet_message)
+					- sizeof(struct rndis_message_header);
+			h->data_len = len;
+			h->oobdata_offset = 0;
+			h->oobdata_len = 0;
+			h->per_packet_info_offset = 0;
+			h->per_packet_info_len = 0;
+			h->vc_handle = 0;
+			h->reserved = 0;
+			p = h + 1; // data begins behind header
+			p_cap -= sizeof(struct rndis_packet_message);
+			add_header = false;
+		}
+
+		size_t chunk_size = len;
+		if (p_cap < chunk_size)
+			chunk_size = p_cap;
+
+		memcpy(p, data, chunk_size);
+		data += chunk_size;
+		p += chunk_size;
+		len -= chunk_size;
+		size_t packet_len = (uint8_t) p - txbuf;
+
+		usb_prepare_transfer(trans, txbuf, packet_len, 0);
+		arm_dcache_flush_delete(txbuf, packet_len);
+		usb_transmit(CDC_TX_ENDPOINT, trans);
+	}
+
+	return 0;
+}
+
+void rndis_packetFilter(uint32_t newfilter);
+
+/******** RNDIS ********/
+
+#define ENC_BUF_SIZE    (OID_LIST_LENGTH + 8) // in u32
+
+// Command buffer
+static DMAMEM uint32_t encapsulated_buffer[ENC_BUF_SIZE];
+
+//Do we have data to send back?
+bool data_to_send = false;
+bool rndis_initialized = false;
+
+/**
+ * \brief Handles a "SEND ENCAPSULATED COMMAND" message.
+ *
+ * \return True on success, false on failure.
+ */
+bool rndis_send_encapsulated_command(uint16_t wLength) {
+
+	struct rndis_message_header *header =
+			(struct rndis_message_header*) encapsulated_buffer;
+	switch (header->message_type) {
+	/* Requests remote intilization. Respond with complete,
+	 eventually should probably do something */
+	case RNDIS_MESSAGE_TYPE_INITIALIZE: {
+
+		struct rndis_initalize_complete_message *m;
+		m = (struct rndis_initalize_complete_message*) encapsulated_buffer;
+
+		//m->MessageID is same as before
+		m->h.message_type = RNDIS_MESSAGE_TYPE_INITIALIZE_COMPLETE;
+		m->h.message_length = sizeof(struct rndis_initalize_complete_message);
+		m->major_version = 1;
+		m->minor_version = 0;
+		m->status = 0 /* RNDIS_STATUS_SUCCESS */;
+		m->device_flags = 0x10;
+		m->medium = 0;
+		m->max_packets_per_message = 1;
+		m->max_transfer_size = 3 * 512; // TODO: make this one better
+		m->packet_alignment_factor = 3;
+		m->reserved_AFListOffset = 0;
+		m->reserved_AFListSize = 0;
+		rndis_initialized = true;
+
+		data_to_send = true;
+	}
+		break;
+	case RNDIS_MESSAGE_TYPE_HALT:
+		break;
+
+	case RNDIS_MESSAGE_TYPE_QUERY:
+		rndis_query_process();
+		break;
+
+	case RNDIS_MESSAGE_TYPE_SET: {
+		rndis_set_process();
+	}
+		break;
+
+	case RNDIS_MESSAGE_TYPE_RESET: {
+		struct rndis_reset_complete_message *m;
+		m = (struct rndis_reset_complete_message*) encapsulated_buffer;
+
+		rndis_initialized = false;
+
+		m->h.message_type = REMOTE_NDIS_RESET_CMPLT;
+		m->h.message_length = sizeof(*m);
+		m->status = 0;
+		m->addressing_reset = 1;
+
+		data_to_send = true;
+	}
+		break;
+
+	case RNDIS_MESSAGE_TYPE_KEEPALIVE: {
+		struct rndis_keepalive_complete_message *m;
+		m = (struct rndis_keepalive_complete_message*) encapsulated_buffer;
+		m->h.message_type = REMOTE_NDIS_KEEPALIVE_CMPLT;
+		m->h.message_length = sizeof(*m);
+		m->status = 0;
+		data_to_send = true;
+		break;
+	}
+
+	default:
+		return false;
+		break;
+	}
+
+	rndis_send_interrupt();
+
+	return true;
+}
+
+/**
+ * \brief Send an interrupt over the interrupt endpoint to the host.
+ */
+void rndis_send_interrupt(void) {
+
+	//Schedule the interrupt to take place next
+	//time USB task is run
+	schedule_interrupt = 1;
+}
+
+// #define INFBUF ((uint32_t *)(encapsulated_buffer + sizeof(rndis_query_cmplt_t)))
+
+uint32_t oid_packet_filter = 0x0000000;
+
+/**
+ * \brief Function to handle a RNDIS "QUERY" command in the encapsulated_buffer
+ */
+void rndis_query_process(void) {
+	struct rndis_query_message *m;
+	struct rndis_query_complete_message *c;
+	rndis_Status_t status = RNDIS_STATUS_SUCCESS;
+
+	m = (struct rndis_query_message*) encapsulated_buffer;
+	c = (struct rndis_query_complete_message*) encapsulated_buffer;
+
+	uint32_t oid = m->oid;
+	/* We set up packet for sending one 4-byte response, which a lot of
+	 these will do. If you need more or less just change the defaults in
+	 the specific case */
+
+	c->h.message_type = REMOTE_NDIS_QUERY_CMPLT;
+	c->status = 0;
+	c->info_buffer_length = 4;
+	c->info_buffer_offset = 16; // relative to reqid
+	uint32_t *info_buf = (uint32_t*) (encapsulated_buffer + sizeof(*c));
+
+	switch (m->oid) {
+
+	/**** GENERAL ****/
+	case OID_GEN_SUPPORTED_LIST:
+		c->info_buffer_length = 4 * OID_LIST_LENGTH;
+		//Copy data to SRAM
+		memcpy(info_buf, OIDSupportedList, c->info_buffer_length);
+		break;
+
+	case OID_GEN_HARDWARE_STATUS:
+		*info_buf = 0x00000000; /* Ready and Willing */
+		break;
+
+	case OID_GEN_MEDIA_SUPPORTED:
+	case OID_GEN_MEDIA_IN_USE:
+	case OID_GEN_PHYSICAL_MEDIUM:
+		*info_buf = NDIS_MEDIUM_802_3;
+		break;
+
+	case OID_GEN_MAXIMUM_FRAME_SIZE:
+		*info_buf = (uint32_t) USB_ETH_MTU - 14; //1280 //102; /* Assume 25 octet header on 15.4 */
+		break;
+
+	case OID_GEN_LINK_SPEED:
+		*info_buf = 250000 / 100; /* in 100 bytes/sec units.. this is kinda a lie */
+		break;
+
+	case OID_GEN_TRANSMIT_BLOCK_SIZE:
+	case OID_GEN_RECEIVE_BLOCK_SIZE:
+		*info_buf = (uint32_t) 102;
+		break;
+
+	case OID_GEN_VENDOR_ID:
+		*info_buf = 0xFFFFFF; /* No vendor ID ! */
+		break;
+
+	case OID_GEN_VENDOR_DESCRIPTION:
+		c->InformationBufferLength = 8;
+		memcpy(info_buf, "Teensy\0\0", 8);
+		break;
+
+	case OID_GEN_CURRENT_PACKET_FILTER:
+		*info_buf = oid_packet_filter;
+		break;
+
+	case OID_GEN_MAXIMUM_TOTAL_SIZE:
+		*info_buf = (uint32_t) USB_ETH_MTU; //127;
+		break;
+
+	case OID_GEN_MEDIA_CONNECT_STATUS:
+		*info_buf = usb_eth_is_active ?
+		NDIS_MEDIA_STATE_CONNECTED :
+										NDIS_MEDIA_STATE_DISCONNECTED;
+		break;
+
+	case OID_GEN_VENDOR_DRIVER_VERSION:
+		*info_buf = 0x00001000;
+		break;
+
+	case OID_GEN_CURRENT_LOOKAHEAD:
+		*info_buf = (uint32_t) USB_ETH_MTU - 14; //102;
+
+//		case OID_GEN_RNDIS_CONFIG_PARAMETER:
+//			break;
+
+		/******* 802.3 (Ethernet) *******/
+
+		/*The address of the NIC encoded in the hardware.*/
+	case OID_802_3_PERMANENT_ADDRESS:
+	case OID_802_3_CURRENT_ADDRESS:
+
+		//Clear unused bytes
+		info_buf[1] = 0;
+
+		//get address
+		memcpy(info_buf, MAC_ADDRESS, 6)
+
+		c->InformationBufferLength = 6;
+		break;
+
+		/* The multicast address list on the NIC enabled for packet reception. */
+	case OID_802_3_MULTICAST_LIST:
+		*info_buf = 0xE000000;
+		break;
+
+		/* The maximum number of multicast addresses the NIC driver can manage. */
+	case OID_802_3_MAXIMUM_LIST_SIZE:
+		*info_buf = 1;
+		break;
+
+		/* Features supported by the underlying driver, which could be emulating Ethernet. */
+	case OID_802_3_MAC_OPTIONS:
+		*info_buf = 0;
+		break;
+
+		/* Frames received with alignment error */
+	case OID_802_3_RCV_ERROR_ALIGNMENT:
+		/* Frames transmitted with one collision */
+	case OID_802_3_XMIT_ONE_COLLISION:
+		/* Frames transmitted with more than one collision */
+	case OID_802_3_XMIT_MORE_COLLISIONS:
+		*info_buf = 0;
+		break;
+
+		/*** Statistical ***/
+
+		/* Frames transmitted without errors */
+	case OID_GEN_XMIT_OK:
+		*info_buf = 0;
+		break;
+
+		/* Frames received without errors */
+	case OID_GEN_RCV_OK:
+		*info_buf = 0;
+		break;
+
+		/* Frames received with errors */
+	case OID_GEN_RCV_ERROR:
+		*info_buf = 0;
+		break;
+
+		/* Frames transmitted with errors */
+	case OID_GEN_XMIT_ERROR:
+		*info_buf = 0;
+		break;
+
+		/* Frames dropped due to lack of buffer space */
+	case OID_GEN_RCV_NO_BUFFER:
+
+		*info_buf = 0; /* Lies! */
+		break;
+
+		/*** Power Managment ***/
+	case OID_PNP_CAPABILITIES:
+		c->InformationBufferLength =
+				sizeof(struct NDIS_PM_WAKE_UP_CAPABILITIES);
+		memset(info_buf, 0, sizeof(struct NDIS_PM_WAKE_UP_CAPABILITIES));
+		break;
+
+	case OID_PNP_QUERY_POWER:
+		c->InformationBufferLength = 0;
+		break;
+
+	case OID_PNP_ENABLE_WAKE_UP:
+		*info_buf = 0; /* Nothing Supported */
+		break;
+
+	default:
+		c->status = 1;
+		c->info_buffer_length = 0;
+		break;
+	}
+
+	//Calculate message size
+	c->h.message_length = sizeof(*c) + c->InformationBufferLength;
+
+	//Check if we are sending no information buffer
+	if (c->info_buffer_length == 0) {
+		c->info_buffer_offset = 0;
+	}
+
+	data_to_send = true;
+}
+
+#undef INFBUF
+#define INFBUF ((uint32_t *)((uint8_t *)&(m->RequestId) + m->InformationBufferOffset))
+#define CFGBUF ((rndis_config_parameter_t *) INFBUF)
+#define PARMNAME  ((uint8_t *)CFGBUF + CFGBUF->ParameterNameOffset)
+#define PARMVALUE ((uint8_t *)CFGBUF + CFGBUF->ParameterValueOffset)
+#define PARMVALUELENGTH	CFGBUF->ParameterValueLength
+#define PARM_NAME_LENGTH 25 /* Maximum parameter name length */
+
+void rndis_handle_config_parm(const char *parmname, const uint8_t *parmvalue,
+		size_t parmlength) {
+	if (strncmp_P(parmname, PSTR("rawmode"), 7) == 0) {
+		if (parmvalue[0] == '0') {
+			usbstick_mode.raw = 0;
+		} else {
+			usbstick_mode.raw = 1;
+		}
+	}
+
+}
+
+/**
+ * \brief Function to deal with a RNDIS "SET" command present in the
+ *        encapsulated_buffer
+ */
+void rndis_set_process(void) {
+	rndis_set_cmplt_t *c;
+	rndis_set_msg_t *m;
+
+	c = ((rndis_set_cmplt_t*) encapsulated_buffer);
+	m = ((rndis_set_msg_t*) encapsulated_buffer);
+
+	//Never have longer parameter names than PARM_NAME_LENGTH
+	char parmname[PARM_NAME_LENGTH];
+
+	uint8_t i;
+	int8_t parmlength;
+
+	/* The parameter name seems to be transmitted in uint16_t, but
+	 we want this in uint8_t. Hence have to throw out some info...  */
+	if (CFGBUF->ParameterNameLength > (PARM_NAME_LENGTH * 2)) {
+		parmlength = PARM_NAME_LENGTH * 2;
+	} else {
+		parmlength = CFGBUF->ParameterNameLength;
+	}
+
+	i = 0;
+	while (parmlength > 0) {
+		//Convert from uint16_t to char array.
+		parmname[i] = (char) *(PARMNAME + 2 * i);
+		parmlength -= 2;
+		i++;
+	}
+
+	switch (m->Oid) {
+
+	/* Parameters set up in 'Advanced' tab */
+	case OID_GEN_RNDIS_CONFIG_PARAMETER:
+		/* Parameter name: rawmode
+		 Parameter desc: Enables or disable raw capture of 802.15.4 Packets
+		 Parameter type: single octet
+		 Parameter values: '0' = disabled, '1' = enabled
+		 */
+		rndis_handle_config_parm(parmname, PARMVALUE, PARMVALUELENGTH);
+		break;
+
+		/* Mandatory general OIDs */
+	case OID_GEN_CURRENT_PACKET_FILTER:
+		oid_packet_filter = *INFBUF;
+
+		if (oid_packet_filter) {
+
+			rndis_packetFilter(oid_packet_filter);
+
+			rndis_state = rndis_data_initialized;
+		} else {
+			rndis_state = rndis_initialized;
+		}
+
+		break;
+
+	case OID_GEN_CURRENT_LOOKAHEAD:
+		break;
+
+	case OID_GEN_PROTOCOL_OPTIONS:
+		break;
+
+		/* Mandatory 802_3 OIDs */
+	case OID_802_3_MULTICAST_LIST:
+		break;
+
+		/* Power Managment: fails for now */
+	case OID_PNP_ADD_WAKE_UP_PATTERN:
+	case OID_PNP_REMOVE_WAKE_UP_PATTERN:
+	case OID_PNP_ENABLE_WAKE_UP:
+
+	default:
+		//c->MessageID is same as before
+		c->MessageType = REMOTE_NDIS_SET_CMPLT;
+		c->MessageLength = sizeof(rndis_set_cmplt_t);
+		c->Status = RNDIS_STATUS_FAILURE;
+		data_to_send = c->MessageLength;
+		return;
+
+		break;
+	}
+
+	//c->MessageID is same as before
+	c->MessageType = REMOTE_NDIS_SET_CMPLT;
+	c->MessageLength = sizeof(rndis_set_cmplt_t);
+	c->Status = RNDIS_STATUS_SUCCESS;
+	data_to_send = c->MessageLength;
+	return;
+}
+
+/**
+ * \brief Handle "GET ENCAPSULATED COMMAND"
+ *
+ * \return True on success, false on failure.
+ *
+ *  This function assumes the message has already set up in
+ * the "encapsulated_buffer" variable. This will be done by
+ * the "SEND ENCAPSULATED COMMAND" message, which will trigger
+ * and interrupt on the host so it knows data is ready.
+ */
+uint8_t rndis_get_encapsulated_command(void) {
+	U8 nb_byte, zlp, i;
+
+	//We assume this is already set up...
+
+	//Received setup message OK
+	Usb_ack_receive_setup();
+
+	if ((data_to_send % EP_CONTROL_LENGTH) == 0) {
+		zlp = TRUE;
+	} else {
+		zlp = FALSE;
+	}                   //!< no need of zero length packet
+
+	i = 0;
+	while ((data_to_send != 0) && (!Is_usb_receive_out())) {
+		while (!Is_usb_read_control_enabled())
+			;
+
+		nb_byte = 0;
+		while (data_to_send != 0)        //!< Send data until necessary
+		{
+			if (nb_byte++ == EP_CONTROL_LENGTH) //!< Check endpoint 0 size
+					{
 				break;
 			}
-			if (!waiting) {
-				wait_begin_at = systick_millis_count;
-				waiting = 1;
-			}
-			if (transmit_previous_timeout)
-				return sent;
-			if (systick_millis_count - wait_begin_at > TX_TIMEOUT_MSEC) {
-				// waited too long, assume the USB host isn't listening
-				transmit_previous_timeout = 1;
-				return sent;
-				//printf("\nstop, waited too long\n");
-				//printf("status = %x\n", status);
-				//printf("tx head=%d\n", tx_head);
-				//printf("TXFILLTUNING=%08lX\n", USB1_TXFILLTUNING);
-				//usb_print_transfer_log();
-				//while (1) ;
-			}
-			if (!usb_configuration)
-				return sent;
-			yield();
+			Usb_write_byte(encapsulated_buffer[i]);
+			i++;
+			data_to_send--;
+
 		}
-		//digitalWriteFast(3, LOW);
-		uint8_t *txdata = txbuffer + (tx_head * TX_SIZE)
-				+ (TX_SIZE - tx_available);
-		if (size >= tx_available) {
-			memcpy(txdata, data, tx_available);
-			//*(txbuffer + (tx_head * TX_SIZE)) = 'A' + tx_head; // to see which buffer
-			//*(txbuffer + (tx_head * TX_SIZE) + 1) = ' '; // really see it
-			uint8_t *txbuf = txbuffer + (tx_head * TX_SIZE);
-			usb_prepare_transfer(xfer, txbuf, TX_SIZE, 0);
-			arm_dcache_flush_delete(txbuf, TX_SIZE);
-			usb_transmit(CDC_TX_ENDPOINT, xfer);
-			if (++tx_head >= TX_NUM)
-				tx_head = 0;
-			size -= tx_available;
-			sent += tx_available;
-			data += tx_available;
-			tx_available = 0;
-			timer_stop();
-		} else {
-			memcpy(txdata, data, size);
-			tx_available -= size;
-			sent += size;
-			size = 0;
-			timer_start_oneshot();
+		Usb_send_control_in();
+	}
+
+	if (Is_usb_receive_out()) {
+		Usb_ack_receive_out();
+		return TRUE;
+	} //!< abort from Host
+
+	if (zlp == TRUE) {
+		while (!Is_usb_read_control_enabled())
+			;
+		Usb_send_control_in();
+	}
+
+	while (!Is_usb_receive_out())
+		;
+	Usb_ack_receive_out();
+
+	return TRUE;
+}
+
+/**
+ * \brief Send a status packet back to the host
+ *
+ * \return Sucess or Failure
+ * \retval 1 Success
+ * \retval 0 Failure
+ */
+uint8_t rndis_send_status(rndis_Status_t stat) {
+	uint8_t i;
+
+	if (Is_usb_read_control_enabled() && !data_to_send) {
+
+		rndis_indicate_status_t *m;
+		m = (rndis_indicate_status_t*) encapsulated_buffer;
+
+		m->MessageType = REMOTE_NDIS_INDICATE_STATUS_MSG;
+		m->MessageLength = sizeof(rndis_indicate_status_t);
+		m->Status = stat;
+
+		for (i = 0; i < sizeof(rndis_indicate_status_t); i++) {
+			Usb_write_byte(encapsulated_buffer[i]);
 		}
+
+		Usb_send_control_in();
+		while (!(Is_usb_read_control_enabled()))
+			;
+
+		while (!Is_usb_receive_out())
+			;
+		Usb_ack_receive_out();
+
+		return 1;
 	}
-	return sent;
-}
 
-int usb_serial_write_buffer_free(void) {
-	uint32_t sum = 0;
-	tx_noautoflush = 1;
-	for (uint32_t i = 0; i < TX_NUM; i++) {
-		if (i == tx_head)
-			continue;
-		if (!(usb_transfer_status(tx_transfer + i) & 0x80))
-			sum += TX_SIZE;
-	}
-	tx_noautoflush = 0;
-	return sum;
-}
-
-void usb_serial_flush_output(void) {
-
-	if (!usb_configuration)
-		return;
-	if (tx_available == 0)
-		return;
-	tx_noautoflush = 1;
-	transfer_t *xfer = tx_transfer + tx_head;
-	uint8_t *txbuf = txbuffer + (tx_head * TX_SIZE);
-	uint32_t txnum = TX_SIZE - tx_available;
-	usb_prepare_transfer(xfer, txbuf, txnum, 0);
-	arm_dcache_flush_delete(txbuf, txnum);
-	usb_transmit(CDC_TX_ENDPOINT, xfer);
-	if (++tx_head >= TX_NUM)
-		tx_head = 0;
-	tx_available = 0;
-	tx_noautoflush = 0;
-}
-
-static void usb_serial_flush_callback(void) {
-	if (tx_noautoflush)
-		return;
-	if (!usb_configuration)
-		return;
-	if (tx_available == 0)
-		return;
-	//printf("flush callback, %d bytes\n", TX_SIZE - tx_available);
-	transfer_t *xfer = tx_transfer + tx_head;
-	uint8_t *txbuf = txbuffer + (tx_head * TX_SIZE);
-	uint32_t txnum = TX_SIZE - tx_available;
-	usb_prepare_transfer(xfer, txbuf, txnum, 0);
-	arm_dcache_flush_delete(txbuf, txnum);
-	usb_transmit(CDC_TX_ENDPOINT, xfer);
-	if (++tx_head >= TX_NUM)
-		tx_head = 0;
-	tx_available = 0;
+	return 0;
 }
 
 //#endif // F_CPU

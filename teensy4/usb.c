@@ -536,6 +536,14 @@ static void endpoint0_setup(uint64_t setupdata)
 			}
 		}
 		break;
+#if USB_RNDIS
+	  case 0x0021: // SEND_ENCAPSULATED_COMMAND
+
+		break;
+	  case 0x01A1: // GET_ENCAPSULATED_RESPONSE
+
+      break;
+#endif
 #if defined(CDC_STATUS_INTERFACE)
 	  case 0x2221: // CDC_SET_CONTROL_LINE_STATE
 		#ifdef CDC_STATUS_INTERFACE

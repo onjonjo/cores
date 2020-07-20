@@ -10,6 +10,8 @@
 
 #include <stdint.h>
 
+#define FIFO_INIT(cap) (struct fifo_cnt){ cap, 0 ,0 }
+
 struct fifo_cnt {
 	size_t capacity;
 	volatile size_t read_cnt;
