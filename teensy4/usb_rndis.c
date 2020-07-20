@@ -28,7 +28,9 @@
  * SOFTWARE.
  */
 
+#include <stdbool.h>
 #include "usb_dev.h"
+#include "usb_desc.h"
 #include "usb_rndis_internal.h"
 #include "core_pins.h"// for delay()
 #include <string.h> // for memcpy()
@@ -103,6 +105,7 @@ OID_PNP_REMOVE_WAKE_UP_PATTERN, };
 #endif
 
 extern volatile uint8_t usb_high_speed;
+extern volatile uint8_t usb_configuration; // non-zero when USB host as configured device
 
 #define MAX_RNDIS_DATA_BYTES (3 * 512)
 #define MAX_USB_PACKETS_PER_RNDIS_DATA ((3 * 512) / CDC_TX_SIZE_12)
@@ -134,8 +137,13 @@ static size_t num_tx_transfers;
 static struct fifo_cnt tx_avail_fifo;
 static struct fifo_cnt tx_used_fifo;
 
+//   --- forward declarations ---
+
 static void rx_queue_transfer(int i);
 static void rx_event(transfer_t *t);
+static void rndis_query_process(void);
+
+//   --- end of forward declarations ---
 
 static inline uint8_t* get_rx_buffer(uint16_t index) {
 	return rx_buffer + (rx_packet_size * index);
@@ -242,9 +250,9 @@ static int rndis_data_copy(const struct rndis_data *d, size_t offset, void *dst,
 	return 0;
 }
 
-ssize_t usb_rndis_read(void *dst, size_t len) {
+int usb_rndis_read(void *dst, size_t len) {
 
-	ssize_t ret = -1;
+	int ret = -1;
 	struct rndis_packet_message h;
 
 	if (fifo_level(&rndis_data_rx_fifo) == 0) {
@@ -253,27 +261,25 @@ ssize_t usb_rndis_read(void *dst, size_t len) {
 	struct rndis_data *d = &rndis_data_rx_pool[fifo_read_index(
 			&rndis_data_rx_fifo)];
 
-	struct rndis_packet_message h;
-
 	if (rndis_data_copy(d, d->read_offset, &h, sizeof(h)) != 0) {
 		goto error;
 	}
 
-	if (h->h.message_type != RNDIS_MESSAGE_TYPE_PACKET_DATA) {
+	if (h.h.message_type != RNDIS_MESSAGE_TYPE_PACKET_DATA) {
 		goto error;
 	}
 
-	if (h->h.message_length > d->read_offset + d->len) {
+	if (h.h.message_length > d->read_offset + d->len) {
 		goto error;
 	}
 
-	size_t data_start = d->read_offset + h->data_offset
-			+ offsetof(h, data_offset);
-	if (data_start > d->len || data_start + h->data_len > d->len) {
+	size_t data_start = d->read_offset + h.data_offset
+			+ offsetof(struct rndis_packet_message, data_offset);
+	if (data_start > d->len || data_start + h.data_len > d->len) {
 		goto error;
 	}
 
-	size_t min_len = h->data_len;
+	size_t min_len = h.data_len;
 	if (len < min_len)
 		min_len = len;
 
@@ -282,7 +288,7 @@ ssize_t usb_rndis_read(void *dst, size_t len) {
 	}
 	ret = len;
 
-	d->read_offset += h->h.message_length; // move to next message
+	d->read_offset += h.h.message_length; // move to next message
 
 	if (d->read_offset + sizeof(h) < d->len) {
 		// there can be more messages
@@ -299,12 +305,12 @@ ssize_t usb_rndis_read(void *dst, size_t len) {
 /**                               Transmit                              **/
 /*************************************************************************/
 
-ssize_t rndis_write(const void *data, size_t len) {
+int rndis_write(const void *data, size_t len) {
 
 	if (!usb_configuration)
 		return 0;
 
-	// XXX this is wrong:
+
 	size_t message_len = len + sizeof(struct rndis_packet_message);
 	size_t transfers_required = (message_len + rx_packet_size - 1)
 			/ rx_packet_size;
@@ -324,7 +330,7 @@ ssize_t rndis_write(const void *data, size_t len) {
 
 			size_t read_index = fifo_read_index(&tx_used_fifo);
 			transfer_t *trans = &tx_transfer[read_index];
-			uint32_t status = usb_transfer_status(xfer);
+			uint32_t status = usb_transfer_status(trans);
 			if (!(status & 0x80)) {
 				if (status & 0x68) {
 					// TODO: what if status has errors???
@@ -380,7 +386,7 @@ ssize_t rndis_write(const void *data, size_t len) {
 		data += chunk_size;
 		p += chunk_size;
 		len -= chunk_size;
-		size_t packet_len = (uint8_t) p - txbuf;
+		size_t packet_len = (uint8_t *)p - txbuf;
 
 		usb_prepare_transfer(trans, txbuf, packet_len, 0);
 		arm_dcache_flush_delete(txbuf, packet_len);
@@ -397,7 +403,7 @@ void rndis_packetFilter(uint32_t newfilter);
 #define ENC_BUF_SIZE    (OID_LIST_LENGTH + 8) // in u32
 
 // Command buffer
-static DMAMEM uint32_t encapsulated_buffer[ENC_BUF_SIZE];
+DMAMEM uint32_t encapsulated_buffer[ENC_BUF_SIZE];
 
 //Do we have data to send back?
 bool data_to_send = false;
@@ -408,7 +414,7 @@ bool rndis_initialized = false;
  *
  * \return True on success, false on failure.
  */
-bool rndis_send_encapsulated_command(uint16_t wLength) {
+bool rndis_send_encapsulated_command(void) {
 
 	struct rndis_message_header *header =
 			(struct rndis_message_header*) encapsulated_buffer;
@@ -477,7 +483,6 @@ bool rndis_send_encapsulated_command(uint16_t wLength) {
 
 	default:
 		return false;
-		break;
 	}
 
 	rndis_send_interrupt();
@@ -495,14 +500,14 @@ void rndis_send_interrupt(void) {
 	schedule_interrupt = 1;
 }
 
-// #define INFBUF ((uint32_t *)(encapsulated_buffer + sizeof(rndis_query_cmplt_t)))
+
 
 uint32_t oid_packet_filter = 0x0000000;
 
 /**
  * \brief Function to handle a RNDIS "QUERY" command in the encapsulated_buffer
  */
-void rndis_query_process(void) {
+static void rndis_query_process(void) {
 	struct rndis_query_message *m;
 	struct rndis_query_complete_message *c;
 	rndis_Status_t status = RNDIS_STATUS_SUCCESS;
@@ -685,26 +690,6 @@ void rndis_query_process(void) {
 	data_to_send = true;
 }
 
-#undef INFBUF
-#define INFBUF ((uint32_t *)((uint8_t *)&(m->RequestId) + m->InformationBufferOffset))
-#define CFGBUF ((rndis_config_parameter_t *) INFBUF)
-#define PARMNAME  ((uint8_t *)CFGBUF + CFGBUF->ParameterNameOffset)
-#define PARMVALUE ((uint8_t *)CFGBUF + CFGBUF->ParameterValueOffset)
-#define PARMVALUELENGTH	CFGBUF->ParameterValueLength
-#define PARM_NAME_LENGTH 25 /* Maximum parameter name length */
-
-void rndis_handle_config_parm(const char *parmname, const uint8_t *parmvalue,
-		size_t parmlength) {
-	if (strncmp_P(parmname, PSTR("rawmode"), 7) == 0) {
-		if (parmvalue[0] == '0') {
-			usbstick_mode.raw = 0;
-		} else {
-			usbstick_mode.raw = 1;
-		}
-	}
-
-}
-
 /**
  * \brief Function to deal with a RNDIS "SET" command present in the
  *        encapsulated_buffer
@@ -716,27 +701,7 @@ void rndis_set_process(void) {
 	c = ((rndis_set_cmplt_t*) encapsulated_buffer);
 	m = ((rndis_set_msg_t*) encapsulated_buffer);
 
-	//Never have longer parameter names than PARM_NAME_LENGTH
-	char parmname[PARM_NAME_LENGTH];
 
-	uint8_t i;
-	int8_t parmlength;
-
-	/* The parameter name seems to be transmitted in uint16_t, but
-	 we want this in uint8_t. Hence have to throw out some info...  */
-	if (CFGBUF->ParameterNameLength > (PARM_NAME_LENGTH * 2)) {
-		parmlength = PARM_NAME_LENGTH * 2;
-	} else {
-		parmlength = CFGBUF->ParameterNameLength;
-	}
-
-	i = 0;
-	while (parmlength > 0) {
-		//Convert from uint16_t to char array.
-		parmname[i] = (char) *(PARMNAME + 2 * i);
-		parmlength -= 2;
-		i++;
-	}
 
 	switch (m->Oid) {
 
@@ -799,104 +764,5 @@ void rndis_set_process(void) {
 	return;
 }
 
-/**
- * \brief Handle "GET ENCAPSULATED COMMAND"
- *
- * \return True on success, false on failure.
- *
- *  This function assumes the message has already set up in
- * the "encapsulated_buffer" variable. This will be done by
- * the "SEND ENCAPSULATED COMMAND" message, which will trigger
- * and interrupt on the host so it knows data is ready.
- */
-uint8_t rndis_get_encapsulated_command(void) {
-	U8 nb_byte, zlp, i;
 
-	//We assume this is already set up...
-
-	//Received setup message OK
-	Usb_ack_receive_setup();
-
-	if ((data_to_send % EP_CONTROL_LENGTH) == 0) {
-		zlp = TRUE;
-	} else {
-		zlp = FALSE;
-	}                   //!< no need of zero length packet
-
-	i = 0;
-	while ((data_to_send != 0) && (!Is_usb_receive_out())) {
-		while (!Is_usb_read_control_enabled())
-			;
-
-		nb_byte = 0;
-		while (data_to_send != 0)        //!< Send data until necessary
-		{
-			if (nb_byte++ == EP_CONTROL_LENGTH) //!< Check endpoint 0 size
-					{
-				break;
-			}
-			Usb_write_byte(encapsulated_buffer[i]);
-			i++;
-			data_to_send--;
-
-		}
-		Usb_send_control_in();
-	}
-
-	if (Is_usb_receive_out()) {
-		Usb_ack_receive_out();
-		return TRUE;
-	} //!< abort from Host
-
-	if (zlp == TRUE) {
-		while (!Is_usb_read_control_enabled())
-			;
-		Usb_send_control_in();
-	}
-
-	while (!Is_usb_receive_out())
-		;
-	Usb_ack_receive_out();
-
-	return TRUE;
-}
-
-/**
- * \brief Send a status packet back to the host
- *
- * \return Sucess or Failure
- * \retval 1 Success
- * \retval 0 Failure
- */
-uint8_t rndis_send_status(rndis_Status_t stat) {
-	uint8_t i;
-
-	if (Is_usb_read_control_enabled() && !data_to_send) {
-
-		rndis_indicate_status_t *m;
-		m = (rndis_indicate_status_t*) encapsulated_buffer;
-
-		m->MessageType = REMOTE_NDIS_INDICATE_STATUS_MSG;
-		m->MessageLength = sizeof(rndis_indicate_status_t);
-		m->Status = stat;
-
-		for (i = 0; i < sizeof(rndis_indicate_status_t); i++) {
-			Usb_write_byte(encapsulated_buffer[i]);
-		}
-
-		Usb_send_control_in();
-		while (!(Is_usb_read_control_enabled()))
-			;
-
-		while (!Is_usb_receive_out())
-			;
-		Usb_ack_receive_out();
-
-		return 1;
-	}
-
-	return 0;
-}
-
-//#endif // F_CPU
-#endif // CDC_STATUS_INTERFACE && CDC_DATA_INTERFACE
+#endif

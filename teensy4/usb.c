@@ -11,6 +11,7 @@
 #include "usb_touch.h"
 #include "usb_midi.h"
 #include "usb_audio.h"
+#include "usb_rndis.h"
 #include "core_pins.h" // for delay()
 #include "avr/pgmspace.h"
 #include <string.h>
@@ -538,10 +539,18 @@ static void endpoint0_setup(uint64_t setupdata)
 		break;
 #if USB_RNDIS
 	  case 0x0021: // SEND_ENCAPSULATED_COMMAND
-
-		break;
+			  endpoint0_setupdata.bothwords = setup.bothwords;
+			  endpoint0_receive(encapsulated_buffer, setup.wLength, 0); // TODO: add length check
+			  if (rndis_send_encapsulated_command()) {
+				  // trigger interrupt
+			  }
+		  	break;
 	  case 0x01A1: // GET_ENCAPSULATED_RESPONSE
-
+		  if (encapsulated_buffer[1]) {
+			  arm_dcache_flush_delete(encapsulated_buffer, encapsulated_buffer[1]);
+			  endpoint0_transmit(encapsulated_buffer, encapsulated_buffer[1], 0);
+			  encapsulated_buffer[1] = 0; // reset message length to zero
+		  }
       break;
 #endif
 #if defined(CDC_STATUS_INTERFACE)
