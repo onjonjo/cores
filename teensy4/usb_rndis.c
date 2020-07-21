@@ -43,6 +43,10 @@
 // defined by usb_dev.h -> usb_desc.h
 #if defined(USB_RNDIS)
 
+#define USB_ETH_MTU 1440
+
+static const uint8_t MAC_ADDRESS[6] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05};
+
 static const uint32_t OIDSupportedList[] = {
 /* Required General */
 OID_GEN_SUPPORTED_LIST,
@@ -137,11 +141,16 @@ static size_t num_tx_transfers;
 static struct fifo_cnt tx_avail_fifo;
 static struct fifo_cnt tx_used_fifo;
 
+static tranfer_t int_xfer;
+
+
 //   --- forward declarations ---
 
 static void rx_queue_transfer(int i);
 static void rx_event(transfer_t *t);
 static void rndis_query_process(void);
+static void rndis_set_process(void);
+void rndis_send_interrupt(void);
 
 //   --- end of forward declarations ---
 
@@ -174,9 +183,9 @@ void usb_rndis_configure(void) {
 	// all transfers are initially available
 	fifo_add(&tx_avail_fifo, num_tx_transfers);
 
-	usb_config_tx(CDC_ACM_ENDPOINT, CDC_ACM_SIZE, 0, NULL); // size same 12 & 480
-	usb_config_rx(CDC_RX_ENDPOINT, rx_packet_size, 0, rx_event);
-	usb_config_tx(CDC_TX_ENDPOINT, rx_packet_size, 1, NULL);
+	usb_config_tx(RNDIS_INT_ENDPOINT, RNDIS_INT_SIZE, 0, NULL); // size same 12 & 480
+	usb_config_rx(RNDIS_RX_ENDPOINT, rx_packet_size, 0, rx_event);
+	usb_config_tx(RNDIS_TX_ENDPOINT, rx_packet_size, 1, NULL);
 	for (i = 0; i < num_rx_transfers; i++)
 		rx_queue_transfer(i);
 
@@ -462,7 +471,7 @@ bool rndis_send_encapsulated_command(void) {
 
 		rndis_initialized = false;
 
-		m->h.message_type = REMOTE_NDIS_RESET_CMPLT;
+		m->h.message_type = RNDIS_MESSAGE_TYPE_RESET_COMPLETE;
 		m->h.message_length = sizeof(*m);
 		m->status = 0;
 		m->addressing_reset = 1;
@@ -474,7 +483,7 @@ bool rndis_send_encapsulated_command(void) {
 	case RNDIS_MESSAGE_TYPE_KEEPALIVE: {
 		struct rndis_keepalive_complete_message *m;
 		m = (struct rndis_keepalive_complete_message*) encapsulated_buffer;
-		m->h.message_type = REMOTE_NDIS_KEEPALIVE_CMPLT;
+		m->h.message_type = RNDIS_MESSAGE_TYPE_KEEPALIVE_COMPLETE;
 		m->h.message_length = sizeof(*m);
 		m->status = 0;
 		data_to_send = true;
@@ -495,9 +504,24 @@ bool rndis_send_encapsulated_command(void) {
  */
 void rndis_send_interrupt(void) {
 
-	//Schedule the interrupt to take place next
-	//time USB task is run
-	schedule_interrupt = 1;
+	static DMAMEM uint32_t RESP_AVAIL[2] = {0x01, 0x00};
+
+	uint32_t status = usb_transfer_status(int_xfer);
+	if (!(status & 0x80)) {
+		if (status & 0x68) {
+		// TODO: what if status has errors???
+		printf("ERROR status = %x, i=%d, ms=%u\n",
+					status, tx_head, systick_millis_count);
+		}
+	} else {
+		// previous transfer pending
+		return;
+	}
+
+	usb_prepare_transfer(int_xfer, txbuf, 8, 0);
+	arm_dcache_flush_delete(txbuf, 8);
+	usb_transmit(RNDIS_INT_ENDPOINT, int_xfer);
+
 }
 
 uint32_t oid_packet_filter = 0x0000000;
@@ -508,7 +532,7 @@ uint32_t oid_packet_filter = 0x0000000;
 static void rndis_query_process(void) {
 	struct rndis_query_message *m;
 	struct rndis_query_complete_message *c;
-	rndis_Status_t status = RNDIS_STATUS_SUCCESS;
+	rndis_Status_t status = 0;
 
 	m = (struct rndis_query_message*) encapsulated_buffer;
 	c = (struct rndis_query_complete_message*) encapsulated_buffer;
@@ -518,7 +542,7 @@ static void rndis_query_process(void) {
 	 these will do. If you need more or less just change the defaults in
 	 the specific case */
 
-	c->h.message_type = REMOTE_NDIS_QUERY_CMPLT;
+	c->h.message_type = RNDIS_MESSAGE_TYPE_QUERY_COMPLETE;
 	c->status = 0;
 	c->info_buffer_length = 4;
 	c->info_buffer_offset = 16; // relative to reqid
@@ -692,7 +716,7 @@ static void rndis_query_process(void) {
  * \brief Function to deal with a RNDIS "SET" command present in the
  *        encapsulated_buffer
  */
-void rndis_set_process(void) {
+static void rndis_set_process(void) {
 
 	struct rndis_set_message *m =
 				(struct rndis_set_message*) encapsulated_buffer;
