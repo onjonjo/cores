@@ -551,7 +551,7 @@ static void rndis_query_process(void) {
 	c->status = 0;
 	c->info_buffer_length = 4;
 	c->info_buffer_offset = 16; // relative to reqid
-	uint32_t *info_buf = (uint32_t*) (encapsulated_buffer + sizeof(*c));
+	uint32_t *info_buf = (uint32_t*) ((uintptr_t)encapsulated_buffer + sizeof(*c));
 
 	printf("Q%d\n", oid);
 	switch (oid) {
