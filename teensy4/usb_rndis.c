@@ -111,6 +111,8 @@ OID_PNP_REMOVE_WAKE_UP_PATTERN, };
 extern volatile uint8_t usb_high_speed;
 extern volatile uint8_t usb_configuration; // non-zero when USB host as configured device
 
+int usb_eth_is_active = 1;
+
 #define MAX_RNDIS_DATA_BYTES (3 * 512)
 #define MAX_USB_PACKETS_PER_RNDIS_DATA ((3 * 512) / CDC_TX_SIZE_12)
 #define RX_NUM_RNDIS_PACKETS  8
@@ -141,7 +143,7 @@ static size_t num_tx_transfers;
 static struct fifo_cnt tx_avail_fifo;
 static struct fifo_cnt tx_used_fifo;
 
-static tranfer_t int_xfer;
+static transfer_t int_xfer;
 
 
 //   --- forward declarations ---
@@ -183,9 +185,9 @@ void usb_rndis_configure(void) {
 	// all transfers are initially available
 	fifo_add(&tx_avail_fifo, num_tx_transfers);
 
-	usb_config_tx(RNDIS_INT_ENDPOINT, RNDIS_INT_SIZE, 0, NULL); // size same 12 & 480
-	usb_config_rx(RNDIS_RX_ENDPOINT, rx_packet_size, 0, rx_event);
-	usb_config_tx(RNDIS_TX_ENDPOINT, rx_packet_size, 1, NULL);
+	usb_config_tx(CDC_ACM_ENDPOINT, CDC_ACM_SIZE, 0, NULL); // size same 12 & 480
+	usb_config_rx(CDC_RX_ENDPOINT, rx_packet_size, 0, rx_event);
+	usb_config_tx(CDC_TX_ENDPOINT, rx_packet_size, 1, NULL);
 	for (i = 0; i < num_rx_transfers; i++)
 		rx_queue_transfer(i);
 
@@ -506,7 +508,7 @@ void rndis_send_interrupt(void) {
 
 	static DMAMEM uint32_t RESP_AVAIL[2] = {0x01, 0x00};
 
-	uint32_t status = usb_transfer_status(int_xfer);
+	uint32_t status = usb_transfer_status(&int_xfer);
 	if (!(status & 0x80)) {
 		if (status & 0x68) {
 		// TODO: what if status has errors???
@@ -518,10 +520,9 @@ void rndis_send_interrupt(void) {
 		return;
 	}
 
-	usb_prepare_transfer(int_xfer, txbuf, 8, 0);
-	arm_dcache_flush_delete(txbuf, 8);
-	usb_transmit(RNDIS_INT_ENDPOINT, int_xfer);
-
+	usb_prepare_transfer(&int_xfer, RESP_AVAIL, 8, 0);
+	arm_dcache_flush_delete(RESP_AVAIL, 8);
+	usb_transmit(CDC_ACM_ENDPOINT, &int_xfer);
 }
 
 uint32_t oid_packet_filter = 0x0000000;
@@ -532,7 +533,6 @@ uint32_t oid_packet_filter = 0x0000000;
 static void rndis_query_process(void) {
 	struct rndis_query_message *m;
 	struct rndis_query_complete_message *c;
-	rndis_Status_t status = 0;
 
 	m = (struct rndis_query_message*) encapsulated_buffer;
 	c = (struct rndis_query_complete_message*) encapsulated_buffer;
@@ -548,7 +548,7 @@ static void rndis_query_process(void) {
 	c->info_buffer_offset = 16; // relative to reqid
 	uint32_t *info_buf = (uint32_t*) (encapsulated_buffer + sizeof(*c));
 
-	switch (m->oid) {
+	switch (oid) {
 
 	/**** GENERAL ****/
 	case OID_GEN_SUPPORTED_LIST:
@@ -585,7 +585,7 @@ static void rndis_query_process(void) {
 		break;
 
 	case OID_GEN_VENDOR_DESCRIPTION:
-		c->InformationBufferLength = 8;
+		c->info_buffer_length = 8;
 		memcpy(info_buf, "Teensy\0\0", 8);
 		break;
 
@@ -623,9 +623,9 @@ static void rndis_query_process(void) {
 		info_buf[1] = 0;
 
 		//get address
-		memcpy(info_buf, MAC_ADDRESS, 6)
+		memcpy(info_buf, MAC_ADDRESS, 6);
 
-		c->InformationBufferLength = 6;
+		c->info_buffer_length = 6;
 		break;
 
 		/* The multicast address list on the NIC enabled for packet reception. */
@@ -682,13 +682,13 @@ static void rndis_query_process(void) {
 
 		/*** Power Managment ***/
 	case OID_PNP_CAPABILITIES:
-		c->InformationBufferLength =
+		c->info_buffer_length =
 				sizeof(struct NDIS_PM_WAKE_UP_CAPABILITIES);
 		memset(info_buf, 0, sizeof(struct NDIS_PM_WAKE_UP_CAPABILITIES));
 		break;
 
 	case OID_PNP_QUERY_POWER:
-		c->InformationBufferLength = 0;
+		c->info_buffer_length = 0;
 		break;
 
 	case OID_PNP_ENABLE_WAKE_UP:
@@ -702,7 +702,7 @@ static void rndis_query_process(void) {
 	}
 
 	//Calculate message size
-	c->h.message_length = sizeof(*c) + c->InformationBufferLength;
+	c->h.message_length = sizeof(*c) + c->info_buffer_length;
 
 	//Check if we are sending no information buffer
 	if (c->info_buffer_length == 0) {
@@ -755,7 +755,7 @@ static void rndis_set_process(void) {
 
 	default:
 		//c->MessageID is same as before
-		c->h.message_type = REMOTE_NDIS_SET_CMPLT;
+		c->h.message_type = RNDIS_MESSAGE_TYPE_SET_COMPLETE;
 		c->h.message_length = sizeof(struct rndis_set_complete_message);
 		c->status = 1;
 		data_to_send = true;
@@ -765,7 +765,7 @@ static void rndis_set_process(void) {
 	}
 
 	//c->MessageID is same as before
-	c->h.message_type = REMOTE_NDIS_SET_CMPLT;
+	c->h.message_type = RNDIS_MESSAGE_TYPE_SET_COMPLETE;
 	c->h.message_length = sizeof(struct rndis_set_complete_message);
 	c->status = 0;
 	data_to_send = true;

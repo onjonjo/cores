@@ -125,10 +125,10 @@ let me know?  http://forum.pjrc.com/forums/4-Suggestions-amp-Bug-Reports
   #define NUM_INTERFACE		2
   #define CDC_STATUS_INTERFACE	0
   #define CDC_DATA_INTERFACE	1
-  #define RNDIS_INT_ENDPOINT	2
+  #define CDC_ACM_ENDPOINT	2
   #define CDC_RX_ENDPOINT       3
   #define CDC_TX_ENDPOINT       4
-  #define RNDIS_INT_SIZE        16
+  #define CDC_ACM_SIZE          16
   #define CDC_RX_SIZE_480       512
   #define CDC_TX_SIZE_480       512
   #define CDC_RX_SIZE_12        64
