@@ -163,7 +163,7 @@ static inline uint8_t* get_rx_buffer(uint16_t index) {
 void usb_rndis_configure(void) {
 	int i;
 
-	printf("usb_serial_configure\n");
+	printf("usb_rndis_configure\n");
 	if (usb_high_speed) {
 		rx_packet_size = CDC_RX_SIZE_480;
 	} else {
@@ -346,7 +346,7 @@ int rndis_write(const void *data, size_t len) {
 				if (status & 0x68) {
 					// TODO: what if status has errors???
 					printf("ERROR status = %x, i=%d, ms=%u\n",
-							status, tx_head, systick_millis_count);
+							status, i, systick_millis_count);
 				}
 				// move this element from used-fifo to avail-fifo
 				fifo_remove(&tx_used_fifo, 1);
@@ -414,7 +414,9 @@ void rndis_packetFilter(uint32_t newfilter);
 #define ENC_BUF_SIZE    (OID_LIST_LENGTH + 8) // in u32
 
 // Command buffer
-DMAMEM uint32_t encapsulated_buffer[ENC_BUF_SIZE];
+__attribute__ ((section(".dmabuffers"), aligned(32))) uint32_t encapsulated_buffer[ENC_BUF_SIZE];
+const size_t encapsulated_buffer_capacity = ENC_BUF_SIZE;
+size_t encapsulated_buffer_len;
 
 //Do we have data to send back?
 bool data_to_send = false;
@@ -434,8 +436,8 @@ bool rndis_send_encapsulated_command(void) {
 	 eventually should probably do something */
 	case RNDIS_MESSAGE_TYPE_INITIALIZE: {
 
-		struct rndis_initalize_complete_message *m;
-		m = (struct rndis_initalize_complete_message*) encapsulated_buffer;
+		struct rndis_initalize_complete_message *m
+		 = (struct rndis_initalize_complete_message*) encapsulated_buffer;
 
 		//m->MessageID is same as before
 		m->h.message_type = RNDIS_MESSAGE_TYPE_INITIALIZE_COMPLETE;
@@ -452,6 +454,7 @@ bool rndis_send_encapsulated_command(void) {
 		m->reserved_AFListSize = 0;
 		rndis_initialized = true;
 
+		//printf("rndis_init\n");
 		data_to_send = true;
 	}
 		break;
@@ -506,20 +509,22 @@ bool rndis_send_encapsulated_command(void) {
  */
 void rndis_send_interrupt(void) {
 
-	static DMAMEM uint32_t RESP_AVAIL[2] = {0x01, 0x00};
+	static  DMAMEM __attribute__ ((aligned(32))) uint32_t RESP_AVAIL[2] = {0x01, 0x00};
 
 	uint32_t status = usb_transfer_status(&int_xfer);
 	if (!(status & 0x80)) {
 		if (status & 0x68) {
 		// TODO: what if status has errors???
-		printf("ERROR status = %x, i=%d, ms=%u\n",
-					status, tx_head, systick_millis_count);
+		printf("ERROR send intr: status = %x, ms=%u\n",
+					status, systick_millis_count);
 		}
 	} else {
 		// previous transfer pending
+		printf("previous transfer pending\n");
 		return;
 	}
 
+	printf("INTR\n");
 	usb_prepare_transfer(&int_xfer, RESP_AVAIL, 8, 0);
 	arm_dcache_flush_delete(RESP_AVAIL, 8);
 	usb_transmit(CDC_ACM_ENDPOINT, &int_xfer);
@@ -548,6 +553,7 @@ static void rndis_query_process(void) {
 	c->info_buffer_offset = 16; // relative to reqid
 	uint32_t *info_buf = (uint32_t*) (encapsulated_buffer + sizeof(*c));
 
+	printf("Q%d\n", oid);
 	switch (oid) {
 
 	/**** GENERAL ****/
@@ -727,20 +733,16 @@ static void rndis_set_process(void) {
 	const uint32_t *info_buf = (uint32_t *)((uintptr_t)m + offsetof(struct rndis_set_message, req_id) + m->info_buffer_offset);
 
 	switch (m->oid) {
-
+	printf("S%d\n", m->oid);
 	/* Parameters set up in 'Advanced' tab */
 	case OID_GEN_RNDIS_CONFIG_PARAMETER:
 		break;
-
 		/* Mandatory general OIDs */
 	case OID_GEN_CURRENT_PACKET_FILTER:
 		oid_packet_filter = *info_buf;
-
 		break;
-
 	case OID_GEN_CURRENT_LOOKAHEAD:
 		break;
-
 	case OID_GEN_PROTOCOL_OPTIONS:
 		break;
 

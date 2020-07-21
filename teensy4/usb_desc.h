@@ -114,7 +114,9 @@ let me know?  http://forum.pjrc.com/forums/4-Suggestions-amp-Bug-Reports
 #if defined(USB_RNDIS)
   #define VENDOR_ID		0x16C0
   #define PRODUCT_ID		0x2483
-  #define DEVICE_CLASS		2	// 2 = Communication Class
+  #define DEVICE_CLASS		0xEF
+  #define DEVICE_SUBCLASS	0x04
+  #define DEVICE_PROTOCOL	0x01
   #define MANUFACTURER_NAME	{'T','e','e','n','s','y','d','u','i','n','o'}
   #define MANUFACTURER_NAME_LEN	11
   #define PRODUCT_NAME		{'U','S','B',' ','E','t','h','e','r','n'}
@@ -128,7 +130,7 @@ let me know?  http://forum.pjrc.com/forums/4-Suggestions-amp-Bug-Reports
   #define CDC_ACM_ENDPOINT	2
   #define CDC_RX_ENDPOINT       3
   #define CDC_TX_ENDPOINT       4
-  #define CDC_ACM_SIZE          16
+  #define CDC_ACM_SIZE          8
   #define CDC_RX_SIZE_480       512
   #define CDC_TX_SIZE_480       512
   #define CDC_RX_SIZE_12        64
@@ -141,6 +143,8 @@ let me know?  http://forum.pjrc.com/forums/4-Suggestions-amp-Bug-Reports
   #define VENDOR_ID		0x16C0
   #define PRODUCT_ID		0x0483
   #define DEVICE_CLASS		2	// 2 = Communication Class
+  #define DEVICE_SUBCLASS	0x02
+  #define DEVICE_PROTOCOL	0x01
   #define MANUFACTURER_NAME	{'T','e','e','n','s','y','d','u','i','n','o'}
   #define MANUFACTURER_NAME_LEN	11
   #define PRODUCT_NAME		{'U','S','B',' ','S','e','r','i','a','l'}

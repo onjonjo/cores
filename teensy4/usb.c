@@ -421,7 +421,9 @@ static void endpoint0_setup(uint64_t setupdata)
 		#if defined(ENDPOINT7_CONFIG)
 		USB1_ENDPTCTRL7 = ENDPOINT7_CONFIG;
 		#endif
-		#if defined(CDC_STATUS_INTERFACE) && defined(CDC_DATA_INTERFACE)
+        #if defined(USB_RNDIS)
+		usb_rndis_configure();
+		#elif defined(CDC_STATUS_INTERFACE) && defined(CDC_DATA_INTERFACE)
 		usb_serial_configure();
 		#elif defined(SEREMU_INTERFACE)
 		usb_seremu_configure();
@@ -539,19 +541,27 @@ static void endpoint0_setup(uint64_t setupdata)
 		break;
 #if USB_RNDIS
 	  case 0x0021: // SEND_ENCAPSULATED_COMMAND
-			  endpoint0_setupdata.bothwords = setup.bothwords;
-			  endpoint0_receive(encapsulated_buffer, setup.wLength, 0); // TODO: add length check
-			  if (rndis_send_encapsulated_command()) {
-				  // trigger interrupt
-			  }
-		  	break;
+	  {
+		      endpoint0_setupdata.bothwords = setup.bothwords;
+
+		      size_t len = encapsulated_buffer_capacity;
+		      if (len > setup.wLength) len = setup.wLength;
+			  arm_dcache_delete(encapsulated_buffer, len);
+			  endpoint0_receive(encapsulated_buffer, len, 1); // TODO: add length check
+		  	return;
+	  }
 	  case 0x01A1: // GET_ENCAPSULATED_RESPONSE
-		  if (encapsulated_buffer[1]) {
+		  //printf("get encaps len=%d t=%x\n", encapsulated_buffer[1], encapsulated_buffer[0]);
+		  if (data_to_send) {
 			  arm_dcache_flush_delete(encapsulated_buffer, encapsulated_buffer[1]);
 			  endpoint0_transmit(encapsulated_buffer, encapsulated_buffer[1], 0);
-			  encapsulated_buffer[1] = 0; // reset message length to zero
+			  data_to_send = false;
+		  } else {
+			  encapsulated_buffer[0] = 0;
+			  arm_dcache_flush_delete(encapsulated_buffer, 1);
+			  endpoint0_transmit(encapsulated_buffer, 1, 0);
 		  }
-      break;
+      return;
 #endif
 #if defined(CDC_STATUS_INTERFACE)
 	  case 0x2221: // CDC_SET_CONTROL_LINE_STATE
@@ -745,6 +755,20 @@ static void endpoint0_complete(void)
 
 	setup.bothwords = endpoint0_setupdata.bothwords;
 	//printf("complete %x %x %x\n", setup.word1, setup.word2, endpoint0_buffer[0]);
+#ifdef USB_RNDIS
+	if (setup.wRequestAndType == 0x0021) {
+	  if (encapsulated_buffer[1] > setup.wLength) {
+		encapsulated_buffer[1] = 0;
+		 printf("invalid encapsulated buffer\n");
+	}
+	  if (rndis_send_encapsulated_command()) {
+		  // trigger interrupt
+	  } else {
+		  encapsulated_buffer[0] = 0xdead1234;
+		  encapsulated_buffer[1] = 0;
+	  }
+}
+#endif
 #ifdef CDC_STATUS_INTERFACE
 	// 0x2021 is CDC_SET_LINE_CODING
 	if (setup.wRequestAndType == 0x2021 && setup.wIndex == CDC_STATUS_INTERFACE) {

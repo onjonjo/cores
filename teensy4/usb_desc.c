@@ -661,8 +661,8 @@ PROGMEM const uint8_t usb_config_descriptor_480[CONFIG_DESC_SIZE] = {
         CDC_STATUS_INTERFACE,			// bInterfaceNumber
         0,                                      // bAlternateSetting
         1,                                      // bNumEndpoints
-        0x02,                                   // bInterfaceClass
-        0x02,                                   // bInterfaceSubClass
+        0xEF, /*0x02,*/                                   // bInterfaceClass
+        0x04, /*0x02,*/                                   // bInterfaceSubClass
         0x01,                                   // bInterfaceProtocol
         0,                                      // iInterface
         // CDC Header Functional Descriptor, CDC Spec 5.2.3.1, Table 26
