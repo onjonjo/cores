@@ -273,8 +273,9 @@ int usb_rndis_read(void *dst, size_t len) {
 		goto error;
 	}
 
-	size_t data_start = d->read_offset + h.data_offset
-			+ offsetof(struct rndis_packet_message, data_offset);
+	size_t
+	data_start = d->read_offset + h.data_offset
+	+ offsetof(struct rndis_packet_message, data_offset);
 	if (data_start > d->len || data_start + h.data_len > d->len) {
 		goto error;
 	}
@@ -309,7 +310,6 @@ int rndis_write(const void *data, size_t len) {
 
 	if (!usb_configuration)
 		return 0;
-
 
 	size_t message_len = len + sizeof(struct rndis_packet_message);
 	size_t transfers_required = (message_len + rx_packet_size - 1)
@@ -386,7 +386,7 @@ int rndis_write(const void *data, size_t len) {
 		data += chunk_size;
 		p += chunk_size;
 		len -= chunk_size;
-		size_t packet_len = (uint8_t *)p - txbuf;
+		size_t packet_len = (uint8_t*) p - txbuf;
 
 		usb_prepare_transfer(trans, txbuf, packet_len, 0);
 		arm_dcache_flush_delete(txbuf, packet_len);
@@ -499,8 +499,6 @@ void rndis_send_interrupt(void) {
 	//time USB task is run
 	schedule_interrupt = 1;
 }
-
-
 
 uint32_t oid_packet_filter = 0x0000000;
 
@@ -695,38 +693,24 @@ static void rndis_query_process(void) {
  *        encapsulated_buffer
  */
 void rndis_set_process(void) {
-	rndis_set_cmplt_t *c;
-	rndis_set_msg_t *m;
 
-	c = ((rndis_set_cmplt_t*) encapsulated_buffer);
-	m = ((rndis_set_msg_t*) encapsulated_buffer);
+	struct rndis_set_message *m =
+				(struct rndis_set_message*) encapsulated_buffer;
 
+	struct rndis_set_complete_message *c =
+			(struct rndis_set_complete_message*) encapsulated_buffer;
 
+	const uint32_t *info_buf = (uint32_t *)((uintptr_t)m + offsetof(struct rndis_set_message, req_id) + m->info_buffer_offset);
 
-	switch (m->Oid) {
+	switch (m->oid) {
 
 	/* Parameters set up in 'Advanced' tab */
 	case OID_GEN_RNDIS_CONFIG_PARAMETER:
-		/* Parameter name: rawmode
-		 Parameter desc: Enables or disable raw capture of 802.15.4 Packets
-		 Parameter type: single octet
-		 Parameter values: '0' = disabled, '1' = enabled
-		 */
-		rndis_handle_config_parm(parmname, PARMVALUE, PARMVALUELENGTH);
 		break;
 
 		/* Mandatory general OIDs */
 	case OID_GEN_CURRENT_PACKET_FILTER:
-		oid_packet_filter = *INFBUF;
-
-		if (oid_packet_filter) {
-
-			rndis_packetFilter(oid_packet_filter);
-
-			rndis_state = rndis_data_initialized;
-		} else {
-			rndis_state = rndis_initialized;
-		}
+		oid_packet_filter = *info_buf;
 
 		break;
 
@@ -747,22 +731,21 @@ void rndis_set_process(void) {
 
 	default:
 		//c->MessageID is same as before
-		c->MessageType = REMOTE_NDIS_SET_CMPLT;
-		c->MessageLength = sizeof(rndis_set_cmplt_t);
-		c->Status = RNDIS_STATUS_FAILURE;
-		data_to_send = c->MessageLength;
+		c->h.message_type = REMOTE_NDIS_SET_CMPLT;
+		c->h.message_length = sizeof(struct rndis_set_complete_message);
+		c->status = 1;
+		data_to_send = true;
 		return;
 
 		break;
 	}
 
 	//c->MessageID is same as before
-	c->MessageType = REMOTE_NDIS_SET_CMPLT;
-	c->MessageLength = sizeof(rndis_set_cmplt_t);
-	c->Status = RNDIS_STATUS_SUCCESS;
-	data_to_send = c->MessageLength;
+	c->h.message_type = REMOTE_NDIS_SET_CMPLT;
+	c->h.message_length = sizeof(struct rndis_set_complete_message);
+	c->status = 0;
+	data_to_send = true;
 	return;
 }
-
 
 #endif
