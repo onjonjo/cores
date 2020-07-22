@@ -114,7 +114,7 @@ extern volatile uint8_t usb_configuration; // non-zero when USB host as configur
 int usb_eth_is_active = 1;
 
 #define MAX_RNDIS_DATA_BYTES (4 * 512)
-#define MAX_USB_PACKETS_PER_RNDIS_DATA ((3 * 512) / CDC_TX_SIZE_12)
+#define MAX_USB_PACKETS_PER_RNDIS_DATA ((3 * 512) / RNDIS_TX_SIZE_12)
 #define RX_NUM_RNDIS_PACKETS  8
 
 struct rndis_data {
@@ -143,8 +143,9 @@ static size_t num_tx_transfers;
 static struct fifo_cnt tx_avail_fifo;
 static struct fifo_cnt tx_used_fifo;
 
-static transfer_t int_xfer;
-
+#define NUM_INT_XFERS 4
+static transfer_t int_xfer[NUM_INT_XFERS] __attribute__ ((used, aligned(32)));
+static size_t current_int_xfer;
 
 //   --- forward declarations ---
 
@@ -165,9 +166,9 @@ void usb_rndis_configure(void) {
 
 	printf("usb_rndis_configure\n");
 	if (usb_high_speed) {
-		rx_packet_size = CDC_RX_SIZE_480;
+		rx_packet_size = RNDIS_RX_SIZE_480;
 	} else {
-		rx_packet_size = CDC_RX_SIZE_12;
+		rx_packet_size = RNDIS_RX_SIZE_12;
 	}
 
 	num_rx_transfers = RX_NUM_RNDIS_PACKETS
@@ -179,15 +180,16 @@ void usb_rndis_configure(void) {
 	num_tx_transfers = TX_NUM_RNDIS_PACKETS
 			* (MAX_RNDIS_DATA_BYTES / rx_packet_size);
 	memset(tx_transfer, 0, sizeof(tx_transfer));
+	memset(int_xfer, 0, sizeof(int_xfer));
 	tx_avail_fifo = FIFO_INIT(TX_NUM_RNDIS_PACKETS);
 	tx_used_fifo = FIFO_INIT(TX_NUM_RNDIS_PACKETS);
 
 	// all transfers are initially available
 	fifo_add(&tx_avail_fifo, num_tx_transfers);
 
-	usb_config_tx(CDC_ACM_ENDPOINT, CDC_ACM_SIZE, 0, NULL); // size same 12 & 480
-	usb_config_rx(CDC_RX_ENDPOINT, rx_packet_size, 0, rx_event);
-	usb_config_tx(CDC_TX_ENDPOINT, rx_packet_size, 1, NULL);
+	usb_config_tx(RNDIS_INT_ENDPOINT, RNDIS_ACM_SIZE, 1, NULL); // size same 12 & 480
+	usb_config_rx(RNDIS_RX_ENDPOINT, rx_packet_size, 0, rx_event);
+	usb_config_tx(RNDIS_TX_ENDPOINT, rx_packet_size, 1, NULL);
 	for (i = 0; i < num_rx_transfers; i++)
 		rx_queue_transfer(i);
 
@@ -198,11 +200,12 @@ void usb_rndis_configure(void) {
 /*************************************************************************/
 
 static void rx_queue_transfer(int i) {
-	NVIC_DISABLE_IRQ(IRQ_USB1);printf("rx queue i=%d\n", i);
+	NVIC_DISABLE_IRQ(IRQ_USB1);
+	printf("rx queue i=%d\n", i);
 	void *buffer = get_rx_buffer(i);
 	usb_prepare_transfer(rx_transfer + i, buffer, rx_packet_size, i);
 	arm_dcache_delete(buffer, rx_packet_size);
-	usb_receive(CDC_RX_ENDPOINT, rx_transfer + i);
+	usb_receive(RNDIS_RX_ENDPOINT, rx_transfer + i);
 	NVIC_ENABLE_IRQ(IRQ_USB1);
 }
 
@@ -401,7 +404,7 @@ int rndis_write(const void *data, size_t len) {
 
 		usb_prepare_transfer(trans, txbuf, packet_len, 0);
 		arm_dcache_flush_delete(txbuf, packet_len);
-		usb_transmit(CDC_TX_ENDPOINT, trans);
+		usb_transmit(RNDIS_TX_ENDPOINT, trans);
 	}
 
 	return 0;
@@ -414,8 +417,8 @@ void rndis_packetFilter(uint32_t newfilter);
 #define ENC_BUF_SIZE    (OID_LIST_LENGTH + 8) // in u32
 
 // Command buffer
-__attribute__ ((section(".dmabuffers"), aligned(32))) uint32_t encapsulated_buffer[ENC_BUF_SIZE+1024 ];
-const size_t encapsulated_buffer_capacity = ENC_BUF_SIZE + 1024;
+__attribute__ ((section(".dmabuffers"), aligned(32))) uint32_t encapsulated_buffer[1024];
+const size_t encapsulated_buffer_capacity =  1024 * sizeof(uint32_t);
 size_t encapsulated_buffer_len;
 
 //Do we have data to send back?
@@ -516,7 +519,10 @@ void rndis_send_interrupt(void) {
 
 	static  DMAMEM __attribute__ ((aligned(32))) uint32_t resp_available[2];
 
-	uint32_t status = usb_transfer_status(&int_xfer);
+	transfer_t *xfer = &int_xfer[current_int_xfer++];
+	if (current_int_xfer == NUM_INT_XFERS) current_int_xfer = 0;
+
+	uint32_t status = usb_transfer_status(xfer);
 	if (!(status & 0x80)) {
 		if (status & 0x68) {
 		// TODO: what if status has errors???
@@ -534,9 +540,9 @@ void rndis_send_interrupt(void) {
 	resp_available[0] = 0x01;
 	resp_available[1] = 0x00;
 
-	usb_prepare_transfer(&int_xfer, resp_available, 8, 0);
+	usb_prepare_transfer(xfer, resp_available, 8, 0);
 	arm_dcache_flush_delete(resp_available, 8);
-	usb_transmit(CDC_ACM_ENDPOINT, &int_xfer);
+	usb_transmit(RNDIS_INT_ENDPOINT, xfer);
 }
 
 void check_rndis_irq(void) {

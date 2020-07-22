@@ -54,13 +54,13 @@ void yield(void)
 	if (running) return; // TODO: does this need to be atomic?
 	running = 1;
 
-
+#if defined(CDC_STATUS_INTERFACE)
 	// USB Serail - Add hack to minimize impact...
 	if (yield_active_check_flags & YIELD_CHECK_USB_SERIAL) {
 		if (Serial.available()) serialEvent();
 		if (_serialEvent_default) yield_active_check_flags &= ~YIELD_CHECK_USB_SERIAL;
 	}
-
+#endif
 #if defined(USB_DUAL_SERIAL) || defined(USB_TRIPLE_SERIAL)
 	if (yield_active_check_flags & YIELD_CHECK_USB_SERIALUSB1) {
 		if (SerialUSB1.available()) serialEventUSB1();

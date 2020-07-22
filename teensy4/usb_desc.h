@@ -123,18 +123,18 @@ let me know?  http://forum.pjrc.com/forums/4-Suggestions-amp-Bug-Reports
   #define PRODUCT_NAME_LEN	10
   #define EP0_SIZE		64
   #define NUM_ENDPOINTS		4
-  #define NUM_USB_BUFFERS	12
+  #define XNUM_USB_BUFFERS	12
   #define NUM_INTERFACE		2
-  #define CDC_STATUS_INTERFACE	0
-  #define CDC_DATA_INTERFACE	1
-  #define CDC_ACM_ENDPOINT	2
-  #define CDC_RX_ENDPOINT       3
-  #define CDC_TX_ENDPOINT       4
-  #define CDC_ACM_SIZE          8
-  #define CDC_RX_SIZE_480       512
-  #define CDC_TX_SIZE_480       512
-  #define CDC_RX_SIZE_12        64
-  #define CDC_TX_SIZE_12        64
+  #define RNDIS_STATUS_INTERFACE	0
+  #define RNDIS_DATA_INTERFACE	1
+  #define RNDIS_INT_ENDPOINT	2
+  #define RNDIS_RX_ENDPOINT       3
+  #define RNDIS_TX_ENDPOINT       4
+  #define RNDIS_ACM_SIZE          8
+  #define RNDIS_RX_SIZE_480       512
+  #define RNDIS_TX_SIZE_480       512
+  #define RNDIS_RX_SIZE_12        64
+  #define RNDIS_TX_SIZE_12        64
   #define ENDPOINT2_CONFIG	ENDPOINT_RECEIVE_UNUSED + ENDPOINT_TRANSMIT_INTERRUPT
   #define ENDPOINT3_CONFIG	ENDPOINT_RECEIVE_BULK + ENDPOINT_TRANSMIT_UNUSED
   #define ENDPOINT4_CONFIG      ENDPOINT_RECEIVE_UNUSED + ENDPOINT_TRANSMIT_BULK
