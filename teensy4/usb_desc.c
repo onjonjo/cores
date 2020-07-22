@@ -693,7 +693,7 @@ PROGMEM const uint8_t usb_config_descriptor_480[CONFIG_DESC_SIZE] = {
         CDC_ACM_ENDPOINT | 0x80,                // bEndpointAddress
         0x03,                                   // bmAttributes (0x03=intr)
         LSB(CDC_ACM_SIZE),MSB(CDC_ACM_SIZE),    // wMaxPacketSize
-        5,                                      // bInterval
+        10,                                      // bInterval
         // interface descriptor, USB spec 9.6.5, page 267-269, Table 9-12
         9,                                      // bLength
         4,                                      // bDescriptorType

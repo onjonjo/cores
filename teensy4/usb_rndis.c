@@ -113,7 +113,7 @@ extern volatile uint8_t usb_configuration; // non-zero when USB host as configur
 
 int usb_eth_is_active = 1;
 
-#define MAX_RNDIS_DATA_BYTES (3 * 512)
+#define MAX_RNDIS_DATA_BYTES (4 * 512)
 #define MAX_USB_PACKETS_PER_RNDIS_DATA ((3 * 512) / CDC_TX_SIZE_12)
 #define RX_NUM_RNDIS_PACKETS  8
 
@@ -414,13 +414,15 @@ void rndis_packetFilter(uint32_t newfilter);
 #define ENC_BUF_SIZE    (OID_LIST_LENGTH + 8) // in u32
 
 // Command buffer
-__attribute__ ((section(".dmabuffers"), aligned(32))) uint32_t encapsulated_buffer[ENC_BUF_SIZE];
-const size_t encapsulated_buffer_capacity = ENC_BUF_SIZE;
+__attribute__ ((section(".dmabuffers"), aligned(32))) uint32_t encapsulated_buffer[ENC_BUF_SIZE+1024 ];
+const size_t encapsulated_buffer_capacity = ENC_BUF_SIZE + 1024;
 size_t encapsulated_buffer_len;
 
 //Do we have data to send back?
 bool data_to_send = false;
 bool rndis_initialized = false;
+
+volatile int usb_rndis_irq = 0;
 
 /**
  * \brief Handles a "SEND ENCAPSULATED COMMAND" message.
@@ -431,6 +433,7 @@ bool rndis_send_encapsulated_command(void) {
 
 	struct rndis_message_header *header =
 			(struct rndis_message_header*) encapsulated_buffer;
+	printf("C%x\n", header->message_type);
 	switch (header->message_type) {
 	/* Requests remote intilization. Respond with complete,
 	 eventually should probably do something */
@@ -444,11 +447,11 @@ bool rndis_send_encapsulated_command(void) {
 		m->h.message_length = sizeof(struct rndis_initalize_complete_message);
 		m->major_version = 1;
 		m->minor_version = 0;
-		m->status = 0 /* RNDIS_STATUS_SUCCESS */;
-		m->device_flags = 0x10;
+		m->status =  RNDIS_STATUS_SUCCESS;
+		m->device_flags = 0x01;
 		m->medium = 0;
 		m->max_packets_per_message = 1;
-		m->max_transfer_size = 3 * 512; // TODO: make this one better
+		m->max_transfer_size = MAX_RNDIS_DATA_BYTES;
 		m->packet_alignment_factor = 3;
 		m->reserved_AFListOffset = 0;
 		m->reserved_AFListSize = 0;
@@ -478,7 +481,7 @@ bool rndis_send_encapsulated_command(void) {
 
 		m->h.message_type = RNDIS_MESSAGE_TYPE_RESET_COMPLETE;
 		m->h.message_length = sizeof(*m);
-		m->status = 0;
+		m->status = RNDIS_STATUS_SUCCESS;
 		m->addressing_reset = 1;
 
 		data_to_send = true;
@@ -490,7 +493,7 @@ bool rndis_send_encapsulated_command(void) {
 		m = (struct rndis_keepalive_complete_message*) encapsulated_buffer;
 		m->h.message_type = RNDIS_MESSAGE_TYPE_KEEPALIVE_COMPLETE;
 		m->h.message_length = sizeof(*m);
-		m->status = 0;
+		m->status = RNDIS_STATUS_SUCCESS;
 		data_to_send = true;
 		break;
 	}
@@ -499,17 +502,19 @@ bool rndis_send_encapsulated_command(void) {
 		return false;
 	}
 
-	rndis_send_interrupt();
-
+	//rndis_send_interrupt();
+	usb_rndis_irq = 1;
 	return true;
 }
+
+
 
 /**
  * \brief Send an interrupt over the interrupt endpoint to the host.
  */
 void rndis_send_interrupt(void) {
 
-	static  DMAMEM __attribute__ ((aligned(32))) uint32_t RESP_AVAIL[2] = {0x01, 0x00};
+	static  DMAMEM __attribute__ ((aligned(32))) uint32_t resp_available[2];
 
 	uint32_t status = usb_transfer_status(&int_xfer);
 	if (!(status & 0x80)) {
@@ -525,9 +530,20 @@ void rndis_send_interrupt(void) {
 	}
 
 	printf("INTR\n");
-	usb_prepare_transfer(&int_xfer, RESP_AVAIL, 8, 0);
-	arm_dcache_flush_delete(RESP_AVAIL, 8);
+	// dma memory must by initialized dynamically
+	resp_available[0] = 0x01;
+	resp_available[1] = 0x00;
+
+	usb_prepare_transfer(&int_xfer, resp_available, 8, 0);
+	arm_dcache_flush_delete(resp_available, 8);
 	usb_transmit(CDC_ACM_ENDPOINT, &int_xfer);
+}
+
+void check_rndis_irq(void) {
+	if (usb_rndis_irq) {
+		usb_rndis_irq = 0;
+		rndis_send_interrupt();
+	}
 }
 
 uint32_t oid_packet_filter = 0x0000000;
@@ -548,7 +564,7 @@ static void rndis_query_process(void) {
 	 the specific case */
 
 	c->h.message_type = RNDIS_MESSAGE_TYPE_QUERY_COMPLETE;
-	c->status = 0;
+	c->status = RNDIS_STATUS_SUCCESS;
 	c->info_buffer_length = 4;
 	c->info_buffer_offset = 16; // relative to reqid
 	uint32_t *info_buf = (uint32_t*) ((uintptr_t)encapsulated_buffer + sizeof(*c));
@@ -702,7 +718,7 @@ static void rndis_query_process(void) {
 		break;
 
 	default:
-		c->status = 1;
+		c->status = RNDIS_STATUS_ERROR;
 		c->info_buffer_length = 0;
 		break;
 	}
@@ -759,7 +775,7 @@ static void rndis_set_process(void) {
 		//c->MessageID is same as before
 		c->h.message_type = RNDIS_MESSAGE_TYPE_SET_COMPLETE;
 		c->h.message_length = sizeof(struct rndis_set_complete_message);
-		c->status = 1;
+		c->status = RNDIS_STATUS_ERROR;
 		data_to_send = true;
 		return;
 
@@ -769,7 +785,7 @@ static void rndis_set_process(void) {
 	//c->MessageID is same as before
 	c->h.message_type = RNDIS_MESSAGE_TYPE_SET_COMPLETE;
 	c->h.message_length = sizeof(struct rndis_set_complete_message);
-	c->status = 0;
+	c->status = RNDIS_STATUS_SUCCESS;
 	data_to_send = true;
 	return;
 }

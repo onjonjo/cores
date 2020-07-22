@@ -220,9 +220,9 @@ static void isr(void)
 	// USB_USBSTS_SRI - set when USB reset detected
 
 	if (status & USB_USBSTS_UI) {
-		//printf("data\n");
+		printf("data\n");
 		uint32_t setupstatus = USB1_ENDPTSETUPSTAT;
-		//printf("USB1_ENDPTSETUPSTAT=%X\n", setupstatus);
+		printf("USB1_ENDPTSETUPSTAT=%X\n", setupstatus);
 		while (setupstatus) {
 			USB1_ENDPTSETUPSTAT = setupstatus;
 			setup_t s;
@@ -232,7 +232,7 @@ static void isr(void)
 				s.word2 = endpoint_queue_head[0].setup1;
 			} while (!(USB1_USBCMD & USB_USBCMD_SUTW));
 			USB1_USBCMD &= ~USB_USBCMD_SUTW;
-			//printf("setup %08lX %08lX\n", s.word1, s.word2);
+			printf("setup %08lX %08lX\n", s.word1, s.word2);
 			USB1_ENDPTFLUSH = (1<<16) | (1<<0); // page 3174
 			while (USB1_ENDPTFLUSH & ((1<<16) | (1<<0))) ;
 			endpoint0_notify_mask = 0;
@@ -327,6 +327,8 @@ static void isr(void)
 	if (status & USB_USBSTS_UEI) {
 		//printf("error\n");
 	}
+	check_rndis_irq();
+
 	if ((USB1_USBINTR & USB_USBINTR_SRE) && (status & USB_USBSTS_SRI)) {
 		//printf("sof %d\n", usb_reboot_timer);
 		if (usb_reboot_timer) {
@@ -543,7 +545,7 @@ static void endpoint0_setup(uint64_t setupdata)
 	  case 0x0021: // SEND_ENCAPSULATED_COMMAND
 	  {
 		      endpoint0_setupdata.bothwords = setup.bothwords;
-
+		      printf("se1 %d", setup.wLength);
 		      size_t len = encapsulated_buffer_capacity;
 		      if (len > setup.wLength) len = setup.wLength;
 			  arm_dcache_delete(encapsulated_buffer, len);
@@ -551,7 +553,7 @@ static void endpoint0_setup(uint64_t setupdata)
 		  	return;
 	  }
 	  case 0x01A1: // GET_ENCAPSULATED_RESPONSE
-		  //printf("get encaps len=%d t=%x\n", encapsulated_buffer[1], encapsulated_buffer[0]);
+		  printf("ge len=%d t=%x\n", encapsulated_buffer[1], encapsulated_buffer[0]);
 		  if (data_to_send) {
 			  arm_dcache_flush_delete(encapsulated_buffer, encapsulated_buffer[1]);
 			  endpoint0_transmit(encapsulated_buffer, encapsulated_buffer[1], 0);
@@ -761,9 +763,12 @@ static void endpoint0_complete(void)
 		encapsulated_buffer[1] = 0;
 		 printf("invalid encapsulated buffer\n");
 	}
+	  printf(" se2 %x %x\n", encapsulated_buffer[0], encapsulated_buffer[3]);
 	  if (rndis_send_encapsulated_command()) {
 		  // trigger interrupt
+		  printf("ok\n");
 	  } else {
+		  printf("err\n");
 		  encapsulated_buffer[0] = 0xdead1234;
 		  encapsulated_buffer[1] = 0;
 	  }
