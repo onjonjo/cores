@@ -45,7 +45,7 @@
 
 #define USB_ETH_MTU 1440
 
-static uint8_t MAC_ADDRESS[6] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05 };
+uint8_t MAC_ADDRESS[6] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05 };
 
 static const uint32_t OIDSupportedList[] = {
 /* Required General */
@@ -126,23 +126,19 @@ struct rndis_data {
 };
 
 static struct rndis_data rndis_data_rx_pool[RX_NUM_RNDIS_PACKETS];
-static struct fifo_cnt rndis_data_rx_fifo =
-		{ .capacity = RX_NUM_RNDIS_PACKETS, };
+static struct fifo_cnt rndis_data_rx_fifo = { .capacity = RX_NUM_RNDIS_PACKETS, };
 
-static transfer_t rx_transfer[RX_NUM_RNDIS_PACKETS
-		* MAX_USB_PACKETS_PER_RNDIS_DATA] __attribute__ ((used, aligned(32)));
+static transfer_t rx_transfer[RX_NUM_RNDIS_PACKETS * MAX_USB_PACKETS_PER_RNDIS_DATA] __attribute__ ((used, aligned(32)));
 DMAMEM static uint8_t rx_buffer[RX_NUM_RNDIS_PACKETS * MAX_RNDIS_DATA_BYTES] __attribute__ ((aligned(32)));
-static uint16_t rx_packet_size = 0;
+static uint16_t usb_packet_size = 0;
 static size_t num_rx_transfers;
 
 #define TX_NUM_RNDIS_PACKETS   4
-static transfer_t tx_transfer[TX_NUM_RNDIS_PACKETS
-		* MAX_USB_PACKETS_PER_RNDIS_DATA] __attribute__ ((used, aligned(32)));
+static transfer_t tx_transfer[TX_NUM_RNDIS_PACKETS * MAX_USB_PACKETS_PER_RNDIS_DATA] __attribute__ ((used, aligned(32)));
 DMAMEM static uint8_t txbuffer[TX_NUM_RNDIS_PACKETS * MAX_RNDIS_DATA_BYTES] __attribute__ ((aligned(32)));
 static size_t num_tx_transfers;
 
-static struct fifo_cnt tx_avail_fifo;
-static struct fifo_cnt tx_used_fifo;
+static struct fifo_cnt tx_transfer_fifo; // contains transfers in use
 
 #define NUM_INT_XFERS 4
 static transfer_t int_xfer[NUM_INT_XFERS] __attribute__ ((used, aligned(32)));
@@ -159,7 +155,7 @@ void rndis_send_interrupt(void);
 //   --- end of forward declarations ---
 
 static inline uint8_t* get_rx_buffer(uint16_t index) {
-	return rx_buffer + (rx_packet_size * index);
+	return rx_buffer + (usb_packet_size * index);
 }
 
 void usb_rndis_configure(void) {
@@ -169,35 +165,30 @@ void usb_rndis_configure(void) {
 	MAC_ADDRESS[0] = (HW_OCOTP_MAC1 >> 8) & 0xFE;
 	MAC_ADDRESS[1] = HW_OCOTP_MAC1 >> 0;
 	MAC_ADDRESS[2] = HW_OCOTP_MAC0 >> 24;
-	MAC_ADDRESS[3] = HW_OCOTP_MAC0 >> 16;
 	MAC_ADDRESS[4] = HW_OCOTP_MAC0 >> 8;
 	MAC_ADDRESS[5] = HW_OCOTP_MAC0 >> 8;
 
 	if (usb_high_speed) {
-		rx_packet_size = RNDIS_RX_SIZE_480;
+		usb_packet_size = RNDIS_RX_SIZE_480;
 	} else {
-		rx_packet_size = RNDIS_RX_SIZE_12;
+		usb_packet_size = RNDIS_RX_SIZE_12;
 	}
 
-	num_rx_transfers = RX_NUM_RNDIS_PACKETS
-			* (MAX_RNDIS_DATA_BYTES / rx_packet_size);
+	num_rx_transfers = RX_NUM_RNDIS_PACKETS * (MAX_RNDIS_DATA_BYTES / usb_packet_size);
+
 	memset(rx_transfer, 0, sizeof(rx_transfer));
 	memset(&rndis_data_rx_fifo, 0, sizeof rndis_data_rx_fifo);
 	rndis_data_rx_fifo = FIFO_INIT(RX_NUM_RNDIS_PACKETS);
 
-	num_tx_transfers = TX_NUM_RNDIS_PACKETS
-			* (MAX_RNDIS_DATA_BYTES / rx_packet_size);
+	num_tx_transfers = TX_NUM_RNDIS_PACKETS * (MAX_RNDIS_DATA_BYTES / usb_packet_size);
 	memset(tx_transfer, 0, sizeof(tx_transfer));
 	memset(int_xfer, 0, sizeof(int_xfer));
-	tx_avail_fifo = FIFO_INIT(TX_NUM_RNDIS_PACKETS);
-	tx_used_fifo = FIFO_INIT(TX_NUM_RNDIS_PACKETS);
 
-	// all transfers are initially available
-	fifo_add(&tx_avail_fifo, num_tx_transfers);
+	tx_transfer_fifo = FIFO_INIT(num_tx_transfers);
 
 	usb_config_tx(RNDIS_INT_ENDPOINT, RNDIS_ACM_SIZE, 1, NULL); // size same 12 & 480
-	usb_config_rx(RNDIS_RX_ENDPOINT, rx_packet_size, 0, rx_event);
-	usb_config_tx(RNDIS_TX_ENDPOINT, rx_packet_size, 1, NULL);
+	usb_config_rx(RNDIS_RX_ENDPOINT, usb_packet_size, 0, rx_event);
+	usb_config_tx(RNDIS_TX_ENDPOINT, usb_packet_size, 1, NULL);
 	for (i = 0; i < num_rx_transfers; i++)
 		rx_queue_transfer(i);
 
@@ -209,10 +200,10 @@ void usb_rndis_configure(void) {
 
 static void rx_queue_transfer(int i) {
 	NVIC_DISABLE_IRQ(IRQ_USB1);
-	printf("rx queue i=%d\n", i);
+	//printf("rx queue i=%d\n", i);
 	void *buffer = get_rx_buffer(i);
-	usb_prepare_transfer(rx_transfer + i, buffer, rx_packet_size, i);
-	arm_dcache_delete(buffer, rx_packet_size);
+	usb_prepare_transfer(rx_transfer + i, buffer, usb_packet_size, i);
+	arm_dcache_delete(buffer, usb_packet_size);
 	usb_receive(RNDIS_RX_ENDPOINT, rx_transfer + i);
 	NVIC_ENABLE_IRQ(IRQ_USB1);
 }
@@ -232,23 +223,21 @@ static void rndis_data_clear(struct rndis_data *d) {
 
 // called by USB interrupt when any packet is received
 static void rx_event(transfer_t *t) {
-	int len = rx_packet_size - ((t->status >> 16) & 0x7FFF);
+	int len = usb_packet_size - ((t->status >> 16) & 0x7FFF);
 	int i = t->callback_param;
-	printf("rx event, len=%d, i=%d\n", len, i);
-	struct rndis_data *d = &rndis_data_rx_pool[fifo_write_index(
-			&rndis_data_rx_fifo)];
+	//printf("rx event, len=%d, i=%d\n", len, i);
+	struct rndis_data *d = &rndis_data_rx_pool[fifo_write_index(&rndis_data_rx_fifo)];
 
 	// append USB packet buffer
 	d->len += len;
 	d->usb_packets[d->num_usb_packets++] = i;
 
-	if (len < rx_packet_size) {
+	if (len < usb_packet_size) {
 		// rdnis frame complete
-		if (fifo_level(&rndis_data_rx_fifo)
-				!= rndis_data_rx_fifo.capacity - 1) {
+		if (fifo_level(&rndis_data_rx_fifo) != rndis_data_rx_fifo.capacity - 1) {
 			fifo_add(&rndis_data_rx_fifo, 1);
-			printf("rxq + %d = %d\n", fifo_write_index(&rndis_data_rx_fifo),
-					fifo_level(&rndis_data_rx_fifo));
+			//printf("rxq + %d = %d\n", fifo_write_index(&rndis_data_rx_fifo),
+//					fifo_level(&rndis_data_rx_fifo));
 		} else {
 			// fifo full, this entry will be reused
 			rndis_data_clear(d);
@@ -257,16 +246,15 @@ static void rx_event(transfer_t *t) {
 }
 
 // copy linear range from all buffers
-static int rndis_data_copy(const struct rndis_data *d, size_t offset, void *dst,
-		size_t len) {
+static int rndis_data_copy(const struct rndis_data *d, size_t offset, void *dst, size_t len) {
 
 	if (offset + len > d->len)
 		return -1;
 
 	while (len) {
-		size_t buffer = offset / rx_packet_size;
-		size_t boffset = offset % rx_packet_size;
-		size_t n = rx_packet_size - boffset;
+		size_t buffer = offset / usb_packet_size;
+		size_t boffset = offset % usb_packet_size;
+		size_t n = usb_packet_size - boffset;
 		if (len < n)
 			n = len;
 
@@ -288,10 +276,9 @@ int usb_rndis_read(void *dst, size_t len) {
 	if (fifo_level(&rndis_data_rx_fifo) == 0) {
 		return -1;
 	}
-	struct rndis_data *d = &rndis_data_rx_pool[fifo_read_index(
-			&rndis_data_rx_fifo)];
+	struct rndis_data *d = &rndis_data_rx_pool[fifo_read_index(&rndis_data_rx_fifo)];
 
-	printf("rxdeq@%d\n", fifo_read_index(&rndis_data_rx_fifo));
+	//printf("rxdeq@%d\n", fifo_read_index(&rndis_data_rx_fifo));
 	if (rndis_data_copy(d, d->read_offset, &h, sizeof(h)) != 0) {
 		goto error;
 	}
@@ -342,17 +329,19 @@ int usb_rndis_read(void *dst, size_t len) {
 /**                               Transmit                              **/
 /*************************************************************************/
 
-int rndis_write(const void *data, size_t len) {
+int usb_rndis_write(const void *data, size_t len) {
 
 	if (!usb_configuration)
 		return 0;
 
 	size_t message_len = len + sizeof(struct rndis_packet_message);
-	size_t transfers_required = (message_len + rx_packet_size - 1)
-			/ rx_packet_size;
+	size_t padding_len = 0;
+	if (message_len % usb_packet_size == 0) padding_len = 1; // add one byte to avoid empty usb packets
+	message_len += padding_len;
+	size_t transfers_required = (message_len + usb_packet_size - 1) / usb_packet_size;
 
 	// try to release the required number of elements
-	size_t avail = fifo_level(&tx_avail_fifo);
+	size_t avail = fifo_remaining(&tx_transfer_fifo);
 
 	if (avail < transfers_required) {
 		// insufficient transfer buffers.
@@ -360,24 +349,23 @@ int rndis_write(const void *data, size_t len) {
 
 		for (size_t i = 0; i != diff; i++) {
 
-			if (fifo_level(&tx_used_fifo) == 0) {
+			if (fifo_level(&tx_transfer_fifo) == 0) {
 				return -1;
 			}
 
-			size_t read_index = fifo_read_index(&tx_used_fifo);
+			size_t read_index = fifo_read_index(&tx_transfer_fifo);
 			transfer_t *trans = &tx_transfer[read_index];
 			uint32_t status = usb_transfer_status(trans);
 			if (!(status & 0x80)) {
 				if (status & 0x68) {
 					// TODO: what if status has errors???
-					printf("ERROR status = %x, i=%d, ms=%u\n", status, i,
-							systick_millis_count);
+					printf("ERROR status = %x, i=%d, ms=%u\n", status, i, systick_millis_count);
 				}
-				// move this element from used-fifo to avail-fifo
-				fifo_remove(&tx_used_fifo, 1);
-				fifo_add(&tx_avail_fifo, 1);
+
+				fifo_remove(&tx_transfer_fifo, 1);
 			} else {
-				return -1;
+				printf("insufficient buffers\n");
+				return -1; // we cannot release transfer buffers. Then we cannot transmit.
 			}
 		}
 	}
@@ -385,48 +373,53 @@ int rndis_write(const void *data, size_t len) {
 	// now we should have enough entries in tx_avail_fifo
 
 	bool add_header = true;
-	while (len) {
-		size_t buf_index = fifo_read_index(&tx_avail_fifo);
-		fifo_remove(&tx_avail_fifo, 1);
-		fifo_add(&tx_used_fifo, 1);
+	while (message_len) {
+		size_t buf_index = fifo_write_index(&tx_transfer_fifo);
+		fifo_add(&tx_transfer_fifo, 1);
 
-		uint8_t *txbuf = txbuffer + (buf_index * rx_packet_size);
+		uint8_t *txbuf = txbuffer + (buf_index * usb_packet_size);
 		transfer_t *trans = &tx_transfer[buf_index];
 
-		void *p = txbuf;
-		size_t p_cap = rx_packet_size;
+		uint8_t *p = txbuf;
+		uint8_t *p_end = p + usb_packet_size; // end of usb packet
 
 		if (add_header) {
-			struct rndis_packet_message *h = p;
+			struct rndis_packet_message *h = (struct rndis_packet_message *)p;
 			h->h.message_type = RNDIS_MESSAGE_TYPE_PACKET_DATA;
 			h->h.message_length = sizeof(struct rndis_packet_message) + len;
-			h->data_offset = sizeof(struct rndis_packet_message)
-					- sizeof(struct rndis_message_header);
+			h->data_offset = sizeof(struct rndis_packet_message) - sizeof(struct rndis_message_header);
 			h->data_len = len;
 			h->oobdata_offset = 0;
 			h->oobdata_len = 0;
+			h->num_oobdata_elements = 0;
 			h->per_packet_info_offset = 0;
 			h->per_packet_info_len = 0;
 			h->vc_handle = 0;
 			h->reserved = 0;
 			p = h + 1; // data begins behind header
-			p_cap -= sizeof(struct rndis_packet_message);
+			message_len -= sizeof(struct rndis_packet_message);
 			add_header = false;
 		}
 
-		size_t chunk_size = len;
-		if (p_cap < chunk_size)
-			chunk_size = p_cap;
+		size_t chunk_size = p_end - p;
+		if (message_len < chunk_size) chunk_size = message_len;
 
-		memcpy(p, data, chunk_size);
+		if (message_len == 1 && padding_len == 1) {
+			*p = 0; // single zero padding byte
+		} else {
+			memcpy(p, data, chunk_size);
+		}
 		data += chunk_size;
 		p += chunk_size;
-		len -= chunk_size;
-		size_t packet_len = (uint8_t*) p - txbuf;
 
+		message_len -= chunk_size;
+		size_t packet_len = (uint8_t*)p - txbuf;
+
+		NVIC_DISABLE_IRQ(IRQ_USB1);
 		usb_prepare_transfer(trans, txbuf, packet_len, 0);
 		arm_dcache_flush_delete(txbuf, packet_len);
 		usb_transmit(RNDIS_TX_ENDPOINT, trans);
+		NVIC_ENABLE_IRQ(IRQ_USB1);
 	}
 
 	return 0;
@@ -456,16 +449,14 @@ volatile int usb_rndis_irq = 0;
  */
 bool rndis_send_encapsulated_command(void) {
 
-	struct rndis_message_header *header =
-			(struct rndis_message_header*) encapsulated_buffer;
-	printf("C%x\n", header->message_type);
+	struct rndis_message_header *header = (struct rndis_message_header*) encapsulated_buffer;
+	//printf("C%x\n", header->message_type);
 	switch (header->message_type) {
 	/* Requests remote intilization. Respond with complete,
 	 eventually should probably do something */
 	case RNDIS_MESSAGE_TYPE_INITIALIZE: {
 
-		struct rndis_initalize_complete_message *m =
-				(struct rndis_initalize_complete_message*) encapsulated_buffer;
+		struct rndis_initalize_complete_message *m = (struct rndis_initalize_complete_message*) encapsulated_buffer;
 
 		//m->MessageID is same as before
 		m->h.message_type = RNDIS_MESSAGE_TYPE_INITIALIZE_COMPLETE;
@@ -547,8 +538,7 @@ void rndis_send_interrupt(void) {
 	if (!(status & 0x80)) {
 		if (status & 0x68) {
 			// TODO: what if status has errors???
-			printf("ERROR send intr: status = %x, ms=%u\n", status,
-					systick_millis_count);
+			printf("ERROR send intr: status = %x, ms=%u\n", status, systick_millis_count);
 		}
 	} else {
 		// previous transfer pending
@@ -594,8 +584,7 @@ static void rndis_query_process(void) {
 	c->status = RNDIS_STATUS_SUCCESS;
 	c->info_buffer_length = 4;
 	c->info_buffer_offset = 16; // relative to reqid
-	uint32_t *info_buf = (uint32_t*) ((uintptr_t) encapsulated_buffer
-			+ sizeof(*c));
+	uint32_t *info_buf = (uint32_t*) ((uintptr_t) encapsulated_buffer + sizeof(*c));
 
 	printf("Q%d\n", oid);
 	switch (oid) {
@@ -767,47 +756,45 @@ static void rndis_query_process(void) {
  */
 static void rndis_set_process(void) {
 
-	struct rndis_set_message *m =
-			(struct rndis_set_message*) encapsulated_buffer;
+	struct rndis_set_message *m = (struct rndis_set_message*) encapsulated_buffer;
 
-	struct rndis_set_complete_message *c =
-			(struct rndis_set_complete_message*) encapsulated_buffer;
+	struct rndis_set_complete_message *c = (struct rndis_set_complete_message*) encapsulated_buffer;
 
 	const uint32_t
 	*info_buf = (uint32_t *)((uintptr_t)m + offsetof(struct rndis_set_message, req_id) + m->info_buffer_offset);
 
 	switch (m->oid) {
-	printf("S%d\n", m->oid);
+	//printf("S%d\n", m->oid);
 	/* Parameters set up in 'Advanced' tab */
-case OID_GEN_RNDIS_CONFIG_PARAMETER:
-	break;
-	/* Mandatory general OIDs */
-case OID_GEN_CURRENT_PACKET_FILTER:
-	oid_packet_filter = *info_buf;
-	break;
-case OID_GEN_CURRENT_LOOKAHEAD:
-	break;
-case OID_GEN_PROTOCOL_OPTIONS:
-	break;
+	case OID_GEN_RNDIS_CONFIG_PARAMETER:
+		break;
+		/* Mandatory general OIDs */
+	case OID_GEN_CURRENT_PACKET_FILTER:
+		oid_packet_filter = *info_buf;
+		break;
+	case OID_GEN_CURRENT_LOOKAHEAD:
+		break;
+	case OID_GEN_PROTOCOL_OPTIONS:
+		break;
 
-	/* Mandatory 802_3 OIDs */
-case OID_802_3_MULTICAST_LIST:
-	break;
+		/* Mandatory 802_3 OIDs */
+	case OID_802_3_MULTICAST_LIST:
+		break;
 
-	/* Power Managment: fails for now */
-case OID_PNP_ADD_WAKE_UP_PATTERN:
-case OID_PNP_REMOVE_WAKE_UP_PATTERN:
-case OID_PNP_ENABLE_WAKE_UP:
+		/* Power Managment: fails for now */
+	case OID_PNP_ADD_WAKE_UP_PATTERN:
+	case OID_PNP_REMOVE_WAKE_UP_PATTERN:
+	case OID_PNP_ENABLE_WAKE_UP:
 
-default:
-	//c->MessageID is same as before
-	c->h.message_type = RNDIS_MESSAGE_TYPE_SET_COMPLETE;
-	c->h.message_length = sizeof(struct rndis_set_complete_message);
-	c->status = RNDIS_STATUS_ERROR;
-	data_to_send = true;
-	return;
+	default:
+		//c->MessageID is same as before
+		c->h.message_type = RNDIS_MESSAGE_TYPE_SET_COMPLETE;
+		c->h.message_length = sizeof(struct rndis_set_complete_message);
+		c->status = RNDIS_STATUS_ERROR;
+		data_to_send = true;
+		return;
 
-	break;
+		break;
 	}
 
 	//c->MessageID is same as before

@@ -545,7 +545,7 @@ static void endpoint0_setup(uint64_t setupdata)
 	  case 0x0021: // SEND_ENCAPSULATED_COMMAND
 	  {
 		      endpoint0_setupdata.bothwords = setup.bothwords;
-		      printf("se1 %d", setup.wLength);
+		      //printf("se1 %d", setup.wLength);
 		      size_t len = encapsulated_buffer_capacity;
 		      if (len > setup.wLength) len = setup.wLength;
 			  arm_dcache_delete(encapsulated_buffer, len);
@@ -553,7 +553,7 @@ static void endpoint0_setup(uint64_t setupdata)
 		  	return;
 	  }
 	  case 0x01A1: // GET_ENCAPSULATED_RESPONSE
-		  printf("ge len=%d t=%x\n", encapsulated_buffer[1], encapsulated_buffer[0]);
+		  //printf("ge len=%d t=%x\n", encapsulated_buffer[1], encapsulated_buffer[0]);
 		  if (data_to_send) {
 			  arm_dcache_flush_delete(encapsulated_buffer, encapsulated_buffer[1]);
 			  endpoint0_transmit(encapsulated_buffer, encapsulated_buffer[1], 0);

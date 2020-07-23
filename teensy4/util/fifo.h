@@ -19,8 +19,13 @@ struct fifo_cnt {
 };
 
 static inline
-size_t fifo_level(struct fifo_cnt *f) {
+size_t fifo_level(const struct fifo_cnt *f) {
 	return f->write_cnt - f->read_cnt;
+}
+
+static inline
+size_t fifo_remaining(const struct fifo_cnt *f) {
+	return f->capacity - fifo_level(f);
 }
 
 static inline
@@ -34,12 +39,12 @@ void fifo_remove(struct fifo_cnt *f, size_t num) {
 }
 
 static inline
-size_t fifo_read_index(struct fifo_cnt *f) {
+size_t fifo_read_index(const struct fifo_cnt *f) {
 	return f->read_cnt % f->capacity;
 }
 
 static inline
-size_t fifo_write_index(struct fifo_cnt *f) {
+size_t fifo_write_index(const struct fifo_cnt *f) {
 	return f->write_cnt % f->capacity;
 }
 
