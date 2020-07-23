@@ -220,9 +220,9 @@ static void isr(void)
 	// USB_USBSTS_SRI - set when USB reset detected
 
 	if (status & USB_USBSTS_UI) {
-		printf("data\n");
+		// printf("data\n");
 		uint32_t setupstatus = USB1_ENDPTSETUPSTAT;
-		printf("USB1_ENDPTSETUPSTAT=%X\n", setupstatus);
+		// printf("USB1_ENDPTSETUPSTAT=%X\n", setupstatus);
 		while (setupstatus) {
 			USB1_ENDPTSETUPSTAT = setupstatus;
 			setup_t s;
@@ -232,7 +232,7 @@ static void isr(void)
 				s.word2 = endpoint_queue_head[0].setup1;
 			} while (!(USB1_USBCMD & USB_USBCMD_SUTW));
 			USB1_USBCMD &= ~USB_USBCMD_SUTW;
-			printf("setup %08lX %08lX\n", s.word1, s.word2);
+			// printf("setup %08lX %08lX\n", s.word1, s.word2);
 			USB1_ENDPTFLUSH = (1<<16) | (1<<0); // page 3174
 			while (USB1_ENDPTFLUSH & ((1<<16) | (1<<0))) ;
 			endpoint0_notify_mask = 0;
@@ -763,12 +763,12 @@ static void endpoint0_complete(void)
 		encapsulated_buffer[1] = 0;
 		 printf("invalid encapsulated buffer\n");
 	}
-	  printf(" se2 %x %x\n", encapsulated_buffer[0], encapsulated_buffer[3]);
+	  //printf(" se2 %x %x\n", encapsulated_buffer[0], encapsulated_buffer[3]);
 	  if (rndis_send_encapsulated_command()) {
 		  // trigger interrupt
-		  printf("ok\n");
+		  //printf("ok\n");
 	  } else {
-		  printf("err\n");
+		  //printf("err\n");
 		  encapsulated_buffer[0] = 0xdead1234;
 		  encapsulated_buffer[1] = 0;
 	  }
