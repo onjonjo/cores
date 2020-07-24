@@ -75,15 +75,15 @@ static uint8_t tx_head=0;
 static uint16_t tx_available=0;
 static uint16_t tx_packet_size=0;
 
-#define RX_NUM_RNDIS_PACKETS  8
-static transfer_t rx_transfer[RX_NUM_RNDIS_PACKETS] __attribute__ ((used, aligned(32)));
-DMAMEM static uint8_t rx_buffer[RX_NUM_RNDIS_PACKETS * CDC_RX_SIZE_480] __attribute__ ((aligned(32)));
-static uint16_t rx_count[RX_NUM_RNDIS_PACKETS];
-static uint16_t rx_index[RX_NUM_RNDIS_PACKETS];
+#define RX_NUM  8
+static transfer_t rx_transfer[RX_NUM] __attribute__ ((used, aligned(32)));
+DMAMEM static uint8_t rx_buffer[RX_NUM * CDC_RX_SIZE_480] __attribute__ ((aligned(32)));
+static uint16_t rx_count[RX_NUM];
+static uint16_t rx_index[RX_NUM];
 static uint16_t rx_packet_size=0;
 static volatile uint8_t rx_head;
 static volatile uint8_t rx_tail;
-static uint8_t rx_list[RX_NUM_RNDIS_PACKETS + 1];
+static uint8_t rx_list[RX_NUM + 1];
 static volatile uint32_t rx_available;
 static void rx_queue_transfer(int i);
 static void rx_event(transfer_t *t);
@@ -119,7 +119,7 @@ void usb_serial_configure(void)
 	usb_config_tx(CDC_ACM_ENDPOINT, CDC_ACM_SIZE, 0, NULL); // size same 12 & 480
 	usb_config_rx(CDC_RX_ENDPOINT, rx_packet_size, 0, rx_event);
 	usb_config_tx(CDC_TX_ENDPOINT, tx_packet_size, 1, NULL);
-	for (i=0; i < RX_NUM_RNDIS_PACKETS; i++) rx_queue_transfer(i);
+	for (i=0; i < RX_NUM; i++) rx_queue_transfer(i);
 	timer_config(usb_serial_flush_callback, TRANSMIT_FLUSH_TIMEOUT);
 }
 
@@ -166,7 +166,7 @@ static void rx_event(transfer_t *t)
 		// add this packet to rx_list
 		rx_count[i] = len;
 		rx_index[i] = 0;
-		if (++head > RX_NUM_RNDIS_PACKETS) head = 0;
+		if (++head > RX_NUM) head = 0;
 		rx_list[head] = i;
 		rx_head = head;
 		rx_available += len;
@@ -190,7 +190,7 @@ int usb_serial_read(void *buffer, uint32_t size)
 	uint32_t tail = rx_tail;
 	//printf("usb_serial_read, size=%d, tail=%d, head=%d\n", size, tail, rx_head);
 	while (count < size && tail != rx_head) {
-		if (++tail > RX_NUM_RNDIS_PACKETS) tail = 0;
+		if (++tail > RX_NUM) tail = 0;
 		uint32_t i = rx_list[tail];
 		uint32_t len = size - count;
 		uint32_t avail = rx_count[i] - rx_index[i];
@@ -221,7 +221,7 @@ int usb_serial_peekchar(void)
 {
 	uint32_t tail = rx_tail;
 	if (tail == rx_head) return -1;
-	if (++tail > RX_NUM_RNDIS_PACKETS) tail = 0;
+	if (++tail > RX_NUM) tail = 0;
 	uint32_t i = rx_list[tail];
 	return rx_buffer[i * CDC_RX_SIZE_480 + rx_index[i]];
 }
@@ -237,7 +237,7 @@ void usb_serial_flush_input(void)
 {
 	uint32_t tail = rx_tail;
 	while (tail != rx_head) {
-		if (++tail > RX_NUM_RNDIS_PACKETS) tail = 0;
+		if (++tail > RX_NUM) tail = 0;
 		uint32_t i = rx_list[tail];
 		rx_available -= rx_count[i] - rx_index[i];
 		rx_queue_transfer(i);

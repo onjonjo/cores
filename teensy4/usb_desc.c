@@ -728,8 +728,8 @@ PROGMEM const uint8_t usb_config_descriptor_480[CONFIG_DESC_SIZE] = {
         CDC_STATUS_INTERFACE,			// bInterfaceNumber
         0,                                      // bAlternateSetting
         1,                                      // bNumEndpoints
-        0xEF, /*0x02,*/                                   // bInterfaceClass
-        0x04, /*0x02,*/                                   // bInterfaceSubClass
+        0x02,                                   // bInterfaceClass
+        0x02,                                   // bInterfaceSubClass
         0x01,                                   // bInterfaceProtocol
         0,                                      // iInterface
         // CDC Header Functional Descriptor, CDC Spec 5.2.3.1, Table 26
@@ -760,7 +760,7 @@ PROGMEM const uint8_t usb_config_descriptor_480[CONFIG_DESC_SIZE] = {
         CDC_ACM_ENDPOINT | 0x80,                // bEndpointAddress
         0x03,                                   // bmAttributes (0x03=intr)
         LSB(CDC_ACM_SIZE),MSB(CDC_ACM_SIZE),    // wMaxPacketSize
-        10,                                      // bInterval
+        5,                                      // bInterval
         // interface descriptor, USB spec 9.6.5, page 267-269, Table 9-12
         9,                                      // bLength
         4,                                      // bDescriptorType
