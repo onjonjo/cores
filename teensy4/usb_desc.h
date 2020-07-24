@@ -143,8 +143,6 @@ let me know?  http://forum.pjrc.com/forums/4-Suggestions-amp-Bug-Reports
   #define VENDOR_ID		0x16C0
   #define PRODUCT_ID		0x0483
   #define DEVICE_CLASS		2	// 2 = Communication Class
-  #define DEVICE_SUBCLASS	0x02
-  #define DEVICE_PROTOCOL	0x01
   #define MANUFACTURER_NAME	{'T','e','e','n','s','y','d','u','i','n','o'}
   #define MANUFACTURER_NAME_LEN	11
   #define PRODUCT_NAME		{'U','S','B',' ','S','e','r','i','a','l'}
