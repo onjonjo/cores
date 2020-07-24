@@ -654,15 +654,15 @@ PROGMEM const uint8_t usb_config_descriptor_480[CONFIG_DESC_SIZE] = {
 #endif
 
 #ifdef RNDIS_DATA_INTERFACE
-	// configuration for 480 Mbit/sec speed
+	    // configuration for 480 Mbit/sec speed
         // interface descriptor, USB spec 9.6.5, page 267-269, Table 9-12
         9,                                      // bLength
         4,                                      // bDescriptorType
-        RNDIS_STATUS_INTERFACE,			// bInterfaceNumber
+        RNDIS_STATUS_INTERFACE,			        // bInterfaceNumber
         0,                                      // bAlternateSetting
         1,                                      // bNumEndpoints
-        0xEF, /*0x02,*/                                   // bInterfaceClass
-        0x04, /*0x02,*/                                   // bInterfaceSubClass
+        0xEF,                                   // bInterfaceClass
+        0x04,                                   // bInterfaceSubClass
         0x01,                                   // bInterfaceProtocol
         0,                                      // iInterface
         // CDC Header Functional Descriptor, CDC Spec 5.2.3.1, Table 26
@@ -685,19 +685,19 @@ PROGMEM const uint8_t usb_config_descriptor_480[CONFIG_DESC_SIZE] = {
         5,                                      // bFunctionLength
         0x24,                                   // bDescriptorType
         0x06,                                   // bDescriptorSubtype
-        RNDIS_STATUS_INTERFACE,                   // bMasterInterface
-        RNDIS_DATA_INTERFACE,                     // bSlaveInterface0
+        RNDIS_STATUS_INTERFACE,                 // bMasterInterface
+        RNDIS_DATA_INTERFACE,                   // bSlaveInterface0
         // endpoint descriptor, USB spec 9.6.6, page 269-271, Table 9-13
         7,                                      // bLength
         5,                                      // bDescriptorType
-        RNDIS_INT_ENDPOINT | 0x80,                // bEndpointAddress
+        RNDIS_INT_ENDPOINT | 0x80,              // bEndpointAddress
         0x03,                                   // bmAttributes (0x03=intr)
-        LSB(RNDIS_ACM_SIZE),MSB(RNDIS_ACM_SIZE),    // wMaxPacketSize
-        10,                                      // bInterval
+        LSB(RNDIS_ACM_SIZE),MSB(RNDIS_ACM_SIZE),// wMaxPacketSize
+        10,                                     // bInterval
         // interface descriptor, USB spec 9.6.5, page 267-269, Table 9-12
         9,                                      // bLength
         4,                                      // bDescriptorType
-        RNDIS_DATA_INTERFACE,                     // bInterfaceNumber
+        RNDIS_DATA_INTERFACE,                   // bInterfaceNumber
         0,                                      // bAlternateSetting
         2,                                      // bNumEndpoints
         0x0A,                                   // bInterfaceClass
@@ -714,11 +714,11 @@ PROGMEM const uint8_t usb_config_descriptor_480[CONFIG_DESC_SIZE] = {
         // endpoint descriptor, USB spec 9.6.6, page 269-271, Table 9-13
         7,                                      // bLength
         5,                                      // bDescriptorType
-        RNDIS_TX_ENDPOINT | 0x80,                 // bEndpointAddress
+        RNDIS_TX_ENDPOINT | 0x80,               // bEndpointAddress
         0x02,                                   // bmAttributes (0x02=bulk)
         LSB(RNDIS_TX_SIZE_480),MSB(RNDIS_TX_SIZE_480),// wMaxPacketSize
         0,                                      // bInterval
-#endif // CDC_DATA_INTERFACE
+#endif // RNDIS_DATA_INTERFACE
 
 #ifdef CDC_DATA_INTERFACE
 	// configuration for 480 Mbit/sec speed

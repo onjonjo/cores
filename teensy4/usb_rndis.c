@@ -347,7 +347,7 @@ size_t encapsulated_buffer_len;
 //Do we have data to send back?
 bool data_to_send = false;
 bool rndis_initialized = false;
-volatile int usb_rndis_irq = 0;
+
 
 /**
  * \brief Handles a "SEND ENCAPSULATED COMMAND" message.
@@ -425,8 +425,8 @@ bool rndis_send_encapsulated_command(void) {
 		return false;
 	}
 
-	//rndis_send_interrupt();
-	usb_rndis_irq = 1;
+	rndis_send_interrupt();
+	//usb_rndis_irq = 1;
 	return true;
 }
 
@@ -463,12 +463,6 @@ void rndis_send_interrupt(void) {
 	usb_transmit(RNDIS_INT_ENDPOINT, xfer);
 }
 
-void check_rndis_irq(void) {
-	if (usb_rndis_irq) {
-		usb_rndis_irq = 0;
-		rndis_send_interrupt();
-	}
-}
 
 uint32_t oid_packet_filter = 0x0000000;
 

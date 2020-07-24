@@ -119,11 +119,11 @@ let me know?  http://forum.pjrc.com/forums/4-Suggestions-amp-Bug-Reports
   #define DEVICE_PROTOCOL	0x01
   #define MANUFACTURER_NAME	{'T','e','e','n','s','y','d','u','i','n','o'}
   #define MANUFACTURER_NAME_LEN	11
-  #define PRODUCT_NAME		{'U','S','B',' ','E','t','h','e','r','n'}
-  #define PRODUCT_NAME_LEN	10
+  #define PRODUCT_NAME		{'U','S','B',' ','E','t','h','e','r','n','e','t'}
+  #define PRODUCT_NAME_LEN	12
   #define EP0_SIZE		64
   #define NUM_ENDPOINTS		4
-  #define XNUM_USB_BUFFERS	12
+  #define NUM_USB_BUFFERS	12
   #define NUM_INTERFACE		2
   #define RNDIS_STATUS_INTERFACE	0
   #define RNDIS_DATA_INTERFACE	1
