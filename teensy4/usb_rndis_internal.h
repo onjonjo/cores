@@ -1,46 +1,6 @@
-/* This file has been prepared for Doxygen automatic documentation generation.*/
-/*! \file ndis.h ***************************************************************
- *
- * \brief
- *      This file contains the possible external configuration of the USB.
- *
- * \addtogroup usbstick
- *
- *
- ******************************************************************************/
-
-/**
- \ingroup usbstick
- \defgroup RNDIS RNDIS Support
- @{
- */
-
-/*
- * ndis.h
- *
- * Modified by Colin O'Flynn <coflynn@newae.com>
- * ntddndis.h modified by Benedikt Spranger <b.spranger@pengutronix.de>
- *
- * Thanks to the cygwin development team,
- * espacially to Casper S. Hornstrup <chorns@users.sourceforge.net>
- *
- * THIS SOFTWARE IS NOT COPYRIGHTED
- *
- * This source code is offered for use in the public domain. You may
- * use, modify or distribute it freely.
- *
- * This code is distributed in the hope that it will be useful but
- * WITHOUT ANY WARRANTY. ALL WARRANTIES, EXPRESS OR IMPLIED ARE HEREBY
- * DISCLAIMED. This includes but is not limited to warranties of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- *
- */
-
-#ifndef _LINUX_NDIS_H
-#define _LINUX_NDIS_H
+#pragma once
 
 #include <stdint.h>
-
 
 #define RNDIS_STATUS_SUCCESS              0x00000000
 #define RNDIS_STATUS_ERROR                0xC0000001
@@ -75,22 +35,6 @@ struct NDIS_PM_WAKE_UP_CAPABILITIES {
 #define NDIS_DEVICE_WAKE_UP_ENABLE                0x00000001
 #define NDIS_DEVICE_WAKE_ON_PATTERN_MATCH_ENABLE  0x00000002
 #define NDIS_DEVICE_WAKE_ON_MAGIC_PACKET_ENABLE   0x00000004
-
-/*
-struct NDIS_PNP_CAPABILITIES {
-	__le32					Flags;
-	struct NDIS_PM_WAKE_UP_CAPABILITIES	WakeUpCapabilities;
-};
-
-struct NDIS_PM_PACKET_PATTERN {
-	__le32	Priority;
-	__le32	Reserved;
-	__le32	MaskSize;
-	__le32	PatternOffset;
-	__le32	PatternSize;
-	__le32	PatternFlags;
-};
-*/
 
 /* Required Object IDs (OIDs) */
 #define OID_GEN_SUPPORTED_LIST            0x00010101
@@ -177,53 +121,6 @@ struct NDIS_PM_PACKET_PATTERN {
 #define OID_802_3_XMIT_HEARTBEAT_FAILURE  0x01020205
 #define OID_802_3_XMIT_TIMES_CRS_LOST     0x01020206
 #define OID_802_3_XMIT_LATE_COLLISIONS    0x01020207
-
-/* Wireless LAN OIDs */
-//Mandatory
-#define OID_802_11_BSSID                  0x0D010101 /* Q  S     */
-#define OID_802_11_SSID                   0x0D010102 /* Q  S     */
-#define OID_802_11_NETWORK_TYPE_IN_USE    0x0D010204 /* Q  S     */
-#define OID_802_11_RSSI                   0x0D010206 /* Q      I */
-#define OID_802_11_BSSID_LIST             0x0D010217 /* Q        */
-#define OID_802_11_BSSID_LIST_SCAN        0x0D01011A /*    S     */
-#define OID_802_11_INFRASTRUCTURE_MODE    0x0D010108 /* Q  S     */
-#define OID_802_11_SUPPORTED_RATES        0x0D01020E /* Q        */
-#define OID_802_11_CONFIGURATION          0x0D010211 /* Q  S     */
-#define OID_802_11_ADD_WEP                0x0D010113 /*    S     */
-#define OID_802_11_WEP_STATUS             0x0D01011B /* Q  S     */
-#define OID_802_11_REMOVE_WEP             0x0D010114 /*    S     */
-#define OID_802_11_DISASSOCIATE           0x0D010115 /*    S     */
-#define OID_802_11_AUTHENTICATION_MODE    0x0D010118 /* Q  S     */
-#define OID_802_11_RELOAD_DEFAULTS        0x0D01011C /*    S     */
-
-
-
-/* OID_GEN_MINIPORT_INFO constants */
-#define NDIS_MINIPORT_BUS_MASTER                      0x00000001
-#define NDIS_MINIPORT_WDM_DRIVER                      0x00000002
-#define NDIS_MINIPORT_SG_LIST                         0x00000004
-#define NDIS_MINIPORT_SUPPORTS_MEDIA_QUERY            0x00000008
-#define NDIS_MINIPORT_INDICATES_PACKETS               0x00000010
-#define NDIS_MINIPORT_IGNORE_PACKET_QUEUE             0x00000020
-#define NDIS_MINIPORT_IGNORE_REQUEST_QUEUE            0x00000040
-#define NDIS_MINIPORT_IGNORE_TOKEN_RING_ERRORS        0x00000080
-#define NDIS_MINIPORT_INTERMEDIATE_DRIVER             0x00000100
-#define NDIS_MINIPORT_IS_NDIS_5                       0x00000200
-#define NDIS_MINIPORT_IS_CO                           0x00000400
-#define NDIS_MINIPORT_DESERIALIZE                     0x00000800
-#define NDIS_MINIPORT_REQUIRES_MEDIA_POLLING          0x00001000
-#define NDIS_MINIPORT_SUPPORTS_MEDIA_SENSE            0x00002000
-#define NDIS_MINIPORT_NETBOOT_CARD                    0x00004000
-#define NDIS_MINIPORT_PM_SUPPORTED                    0x00008000
-#define NDIS_MINIPORT_SUPPORTS_MAC_ADDRESS_OVERWRITE  0x00010000
-#define NDIS_MINIPORT_USES_SAFE_BUFFER_APIS           0x00020000
-#define NDIS_MINIPORT_HIDDEN                          0x00040000
-#define NDIS_MINIPORT_SWENUM                          0x00080000
-#define NDIS_MINIPORT_SURPRISE_REMOVE_OK              0x00100000
-#define NDIS_MINIPORT_NO_HALT_ON_SUSPEND              0x00200000
-#define NDIS_MINIPORT_HARDWARE_DEVICE                 0x00400000
-#define NDIS_MINIPORT_SUPPORTS_CANCEL_SEND_PACKETS    0x00800000
-#define NDIS_MINIPORT_64BITS_DMA                      0x01000000
 
 #define NDIS_MEDIUM_802_3		0x00000000
 #define NDIS_MEDIUM_802_5		0x00000001
@@ -379,7 +276,3 @@ struct rndis_reset_complete_message {
 	uint32_t status;
 	uint32_t addressing_reset;
 };
-
-#endif /* _LINUX_NDIS_H */
-
-/** @} */
