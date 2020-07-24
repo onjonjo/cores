@@ -222,7 +222,7 @@ static void isr(void)
 	if (status & USB_USBSTS_UI) {
 		// printf("data\n");
 		uint32_t setupstatus = USB1_ENDPTSETUPSTAT;
-		// printf("USB1_ENDPTSETUPSTAT=%X\n", setupstatus);
+		//printf("USB1_ENDPTSETUPSTAT=%X\n", setupstatus);
 		while (setupstatus) {
 			USB1_ENDPTSETUPSTAT = setupstatus;
 			setup_t s;
@@ -232,7 +232,7 @@ static void isr(void)
 				s.word2 = endpoint_queue_head[0].setup1;
 			} while (!(USB1_USBCMD & USB_USBCMD_SUTW));
 			USB1_USBCMD &= ~USB_USBCMD_SUTW;
-			// printf("setup %08lX %08lX\n", s.word1, s.word2);
+			//printf("setup %08lX %08lX\n", s.word1, s.word2);
 			USB1_ENDPTFLUSH = (1<<16) | (1<<0); // page 3174
 			while (USB1_ENDPTFLUSH & ((1<<16) | (1<<0))) ;
 			endpoint0_notify_mask = 0;
@@ -422,7 +422,7 @@ static void endpoint0_setup(uint64_t setupdata)
 		#if defined(ENDPOINT7_CONFIG)
 		USB1_ENDPTCTRL7 = ENDPOINT7_CONFIG;
 		#endif
-        #if defined(USB_RNDIS)
+		#if defined(RNDIS_STATUS_INTERFACE)
 		usb_rndis_configure();
 		#elif defined(CDC_STATUS_INTERFACE) && defined(CDC_DATA_INTERFACE)
 		usb_serial_configure();
